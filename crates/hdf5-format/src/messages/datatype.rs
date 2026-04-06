@@ -14,12 +14,36 @@ const DT_VERSION: u8 = 1;
 const CLASS_FIXED_POINT: u8 = 0;
 const CLASS_FLOATING_POINT: u8 = 1;
 const CLASS_STRING: u8 = 3;
+const CLASS_COMPOUND: u8 = 6;
+const CLASS_ENUM: u8 = 8;
+const CLASS_VLEN: u8 = 9;
+const CLASS_ARRAY: u8 = 10;
 
 /// Byte order for numeric types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteOrder {
     LittleEndian,
     BigEndian,
+}
+
+/// A member within a compound datatype.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompoundMember {
+    /// Member name.
+    pub name: String,
+    /// Byte offset within the compound element.
+    pub offset: u32,
+    /// Datatype of this member.
+    pub datatype: DatatypeMessage,
+}
+
+/// A member within an enum datatype.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumMember {
+    /// Enum member name.
+    pub name: String,
+    /// Raw value bytes (length matches base type size).
+    pub value: Vec<u8>,
 }
 
 /// HDF5 datatype descriptor.
@@ -52,6 +76,32 @@ pub enum DatatypeMessage {
         padding: u8,
         /// Character set: 0 = ASCII, 1 = UTF-8.
         charset: u8,
+    },
+    /// Compound datatype (class 6).
+    Compound {
+        /// Total size of the compound element in bytes.
+        size: u32,
+        /// Members of the compound type.
+        members: Vec<CompoundMember>,
+    },
+    /// Enumeration datatype (class 8).
+    Enum {
+        /// Base integer type.
+        base: Box<DatatypeMessage>,
+        /// Enumeration members (name + value pairs).
+        members: Vec<EnumMember>,
+    },
+    /// Variable-length datatype (class 9) -- currently only vlen strings.
+    VarLenString {
+        /// Character set: 0 = ASCII, 1 = UTF-8.
+        charset: u8,
+    },
+    /// Array datatype (class 10).
+    Array {
+        /// Dimension sizes of the array.
+        dims: Vec<u32>,
+        /// Base element type.
+        base: Box<DatatypeMessage>,
     },
 }
 
@@ -185,18 +235,85 @@ impl DatatypeMessage {
             charset: 1, // UTF-8
         }
     }
+
+    /// Variable-length UTF-8 string type.
+    ///
+    /// Note: `element_size()` for this type requires a `FormatContext` to
+    /// compute. Use `element_size_ctx()` or `vlen_ref_size()` instead.
+    pub fn vlen_string_utf8() -> Self {
+        Self::VarLenString { charset: 1 }
+    }
+
+    /// Variable-length ASCII string type.
+    pub fn vlen_string_ascii() -> Self {
+        Self::VarLenString { charset: 0 }
+    }
+
+    /// Compound datatype.
+    pub fn compound(size: u32, members: Vec<CompoundMember>) -> Self {
+        Self::Compound { size, members }
+    }
+
+    /// Enumeration datatype.
+    pub fn enumeration(base: DatatypeMessage, members: Vec<EnumMember>) -> Self {
+        Self::Enum {
+            base: Box::new(base),
+            members,
+        }
+    }
+
+    /// Array datatype.
+    pub fn array(dims: Vec<u32>, base: DatatypeMessage) -> Self {
+        Self::Array {
+            dims,
+            base: Box::new(base),
+        }
+    }
 }
 
 // ========================================================================= queries
 
 impl DatatypeMessage {
     /// Returns the element size in bytes.
+    ///
+    /// For `VarLenString`, this returns the on-disk reference size assuming
+    /// 8-byte addresses (sizeof_addr=8): 8 + 4 = 12.
+    /// Use `element_size_ctx()` for an exact answer with a specific context.
     pub fn element_size(&self) -> u32 {
         match self {
             Self::FixedPoint { size, .. } => *size,
             Self::FloatingPoint { size, .. } => *size,
             Self::FixedString { size, .. } => *size,
+            Self::Compound { size, .. } => *size,
+            Self::Enum { base, .. } => base.element_size(),
+            Self::VarLenString { .. } => {
+                // Default assumption: sizeof_addr = 8
+                // vlen ref = sizeof_addr + 4 = 12
+                12
+            }
+            Self::Array { dims, base } => {
+                let product: u32 = dims.iter().product();
+                product * base.element_size()
+            }
         }
+    }
+
+    /// Returns the element size using an explicit format context.
+    ///
+    /// This is needed for `VarLenString` where the size depends on
+    /// `sizeof_addr`.
+    pub fn element_size_ctx(&self, ctx: &FormatContext) -> u32 {
+        match self {
+            Self::VarLenString { .. } => {
+                ctx.sizeof_addr as u32 + 4
+            }
+            _ => self.element_size(),
+        }
+    }
+
+    /// Returns the size of a variable-length reference for a given context.
+    pub fn vlen_ref_size(ctx: &FormatContext) -> u32 {
+        ctx.sizeof_addr as u32 + 4
     }
 }
 
@@ -204,7 +321,7 @@ impl DatatypeMessage {
 
 impl DatatypeMessage {
     /// Encode into a byte vector.
-    pub fn encode(&self, _ctx: &FormatContext) -> Vec<u8> {
+    pub fn encode(&self, ctx: &FormatContext) -> Vec<u8> {
         match self {
             Self::FixedPoint {
                 size,
@@ -310,11 +427,157 @@ impl DatatypeMessage {
 
                 buf
             }
+            Self::Compound { size, members } => {
+                // Version 3 compound type
+                let version: u8 = 3;
+                let num_members = members.len() as u16;
+
+                let mut buf = Vec::new();
+
+                // byte 0: class | version<<4
+                buf.push(CLASS_COMPOUND | (version << 4));
+
+                // bytes 1-3: num_members as 16-bit LE in bytes 1-2, byte 3 = 0
+                buf.push(num_members as u8);
+                buf.push((num_members >> 8) as u8);
+                buf.push(0);
+
+                // bytes 4-7: element size
+                buf.extend_from_slice(&size.to_le_bytes());
+
+                // Properties: for each member
+                for member in members {
+                    // Name (null-terminated)
+                    buf.extend_from_slice(member.name.as_bytes());
+                    buf.push(0);
+
+                    // Byte offset (u32 LE for version 3)
+                    buf.extend_from_slice(&member.offset.to_le_bytes());
+
+                    // Member datatype (recursive)
+                    let dt_encoded = member.datatype.encode(ctx);
+                    buf.extend_from_slice(&dt_encoded);
+                }
+
+                buf
+            }
+            Self::Enum { base, members } => {
+                let num_members = members.len() as u16;
+                let base_size = base.element_size();
+
+                let mut buf = Vec::new();
+
+                // byte 0: class | version<<4
+                buf.push(CLASS_ENUM | (DT_VERSION << 4));
+
+                // bytes 1-3: num_members as 16-bit LE
+                buf.push(num_members as u8);
+                buf.push((num_members >> 8) as u8);
+                buf.push(0);
+
+                // bytes 4-7: element size (= base type size)
+                buf.extend_from_slice(&base_size.to_le_bytes());
+
+                // Properties: base datatype message
+                let base_encoded = base.encode(ctx);
+                buf.extend_from_slice(&base_encoded);
+
+                // Then each member name (null-terminated, padded to 8-byte boundary)
+                for member in members {
+                    let name_start = buf.len();
+                    buf.extend_from_slice(member.name.as_bytes());
+                    buf.push(0);
+                    // Pad name field (including null) to 8-byte boundary
+                    let name_field_len = buf.len() - name_start;
+                    let padded = (name_field_len + 7) & !7;
+                    let pad = padded - name_field_len;
+                    if pad > 0 {
+                        buf.extend_from_slice(&vec![0u8; pad]);
+                    }
+                }
+                // Then all values contiguously
+                for member in members {
+                    buf.extend_from_slice(&member.value);
+                }
+
+                buf
+            }
+            Self::VarLenString { charset } => {
+                // Variable-length string: class 9, version 1
+                //
+                // On-disk element size = sizeof_addr + 4 (the vlen reference).
+                // The flags encode that this is a string-type vlen.
+                // Properties: the base type (1-byte char, class 3 string).
+                let vlen_size = Self::vlen_ref_size(ctx);
+
+                let mut buf = Vec::new();
+
+                // byte 0: class 9 | version<<4
+                buf.push(CLASS_VLEN | (DT_VERSION << 4));
+
+                // bytes 1-3: flags
+                // byte 1 bits 0-3: type = 1 (string)
+                //         bits 4-7: padding type (0 = null pad)
+                // byte 2 bits 0-3: charset (0=ASCII, 1=UTF-8)
+                buf.push(0x01); // type = string (1)
+                buf.push(*charset & 0x0F); // charset
+                buf.push(0);
+
+                // bytes 4-7: element size
+                buf.extend_from_slice(&vlen_size.to_le_bytes());
+
+                // Properties: base type -- 1 byte char (class 3 string, size 1)
+                // This is a minimal fixed-string type with size=1.
+                let base_type = Self::FixedString {
+                    size: 1,
+                    padding: 0,
+                    charset: *charset,
+                };
+                let base_encoded = base_type.encode(ctx);
+                buf.extend_from_slice(&base_encoded);
+
+                buf
+            }
+            Self::Array { dims, base } => {
+                // Array: class 10, version 3
+                let version: u8 = 3;
+                let base_size = base.element_size();
+                let product: u32 = dims.iter().product();
+                let total_size = product * base_size;
+
+                let mut buf = Vec::new();
+
+                // byte 0: class | version<<4
+                buf.push(CLASS_ARRAY | (version << 4));
+
+                // bytes 1-3: flags = 0
+                buf.push(0);
+                buf.push(0);
+                buf.push(0);
+
+                // bytes 4-7: element size (total array size)
+                buf.extend_from_slice(&total_size.to_le_bytes());
+
+                // Properties:
+                // ndims: u8
+                buf.push(dims.len() as u8);
+
+                // dims: ndims * u32 LE
+                for &d in dims {
+                    buf.extend_from_slice(&d.to_le_bytes());
+                }
+
+                // base datatype message (recursive)
+                let base_encoded = base.encode(ctx);
+                buf.extend_from_slice(&base_encoded);
+
+                buf
+            }
         }
     }
 
     /// Decode from a byte buffer.  Returns `(message, bytes_consumed)`.
-    pub fn decode(buf: &[u8], _ctx: &FormatContext) -> FormatResult<(Self, usize)> {
+    pub fn decode(buf: &[u8], ctx: &FormatContext) -> FormatResult<(Self, usize)> {
         if buf.len() < 8 {
             return Err(FormatError::BufferTooShort {
                 needed: 8,
@@ -324,9 +587,6 @@ impl DatatypeMessage {
 
         let class = buf[0] & 0x0F;
         let version = buf[0] >> 4;
-        if version != DT_VERSION {
-            return Err(FormatError::InvalidVersion(version));
-        }
 
         let flags0 = buf[1];
         let flags1 = buf[2];
@@ -336,6 +596,9 @@ impl DatatypeMessage {
 
         match class {
             CLASS_FIXED_POINT => {
+                if version != DT_VERSION {
+                    return Err(FormatError::InvalidVersion(version));
+                }
                 if buf.len() < 12 {
                     return Err(FormatError::BufferTooShort {
                         needed: 12,
@@ -364,6 +627,9 @@ impl DatatypeMessage {
                 ))
             }
             CLASS_FLOATING_POINT => {
+                if version != DT_VERSION {
+                    return Err(FormatError::InvalidVersion(version));
+                }
                 if buf.len() < 20 {
                     return Err(FormatError::BufferTooShort {
                         needed: 20,
@@ -404,6 +670,10 @@ impl DatatypeMessage {
             }
             CLASS_STRING => {
                 // String class: 8-byte header, no additional properties
+                // Accept version 1 or 3 (HDF5 uses both)
+                if version != DT_VERSION && version != 3 {
+                    return Err(FormatError::InvalidVersion(version));
+                }
                 let padding = flags0 & 0x0F;
                 let charset = (flags0 >> 4) & 0x0F;
 
@@ -414,6 +684,231 @@ impl DatatypeMessage {
                         charset,
                     },
                     8,
+                ))
+            }
+            CLASS_COMPOUND => {
+                // Compound: version 1 or 3
+                if version != 1 && version != 3 {
+                    return Err(FormatError::UnsupportedFeature(format!(
+                        "compound datatype version {}",
+                        version
+                    )));
+                }
+
+                // num_members from flags bytes 1-2 (16-bit LE)
+                let num_members = u16::from_le_bytes([flags0, flags1]) as usize;
+
+                let mut pos = 8; // past the 8-byte header
+
+                let mut members = Vec::with_capacity(num_members);
+                for _ in 0..num_members {
+                    // Name: null-terminated string
+                    let name_start = pos;
+                    while pos < buf.len() && buf[pos] != 0 {
+                        pos += 1;
+                    }
+                    if pos >= buf.len() {
+                        return Err(FormatError::InvalidData(
+                            "unterminated compound member name".into(),
+                        ));
+                    }
+                    let name = String::from_utf8_lossy(&buf[name_start..pos]).to_string();
+                    pos += 1; // skip null terminator
+
+                    // Version 1: names are padded to 8-byte boundary
+                    // (from the start of the name, including the null)
+                    if version == 1 {
+                        let name_field_len = pos - name_start;
+                        let padded = (name_field_len + 7) & !7;
+                        pos = name_start + padded;
+                    }
+
+                    // Byte offset
+                    let offset = if version == 1 {
+                        // Version 1: 4-byte offset
+                        if pos + 4 > buf.len() {
+                            return Err(FormatError::BufferTooShort {
+                                needed: pos + 4,
+                                available: buf.len(),
+                            });
+                        }
+                        let o = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+                        pos += 4;
+
+                        // Version 1 has additional fields: dimensionality(1),
+                        // reserved(3), dim_perm(4), reserved(4), dim_sizes(4*4)
+                        // = 1 + 3 + 4 + 4 + 16 = 28 bytes
+                        if pos + 28 > buf.len() {
+                            return Err(FormatError::BufferTooShort {
+                                needed: pos + 28,
+                                available: buf.len(),
+                            });
+                        }
+                        pos += 28; // skip v1 dimension info
+
+                        o
+                    } else {
+                        // Version 3: 4-byte offset, no padding or dimension info
+                        if pos + 4 > buf.len() {
+                            return Err(FormatError::BufferTooShort {
+                                needed: pos + 4,
+                                available: buf.len(),
+                            });
+                        }
+                        let o = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+                        pos += 4;
+                        o
+                    };
+
+                    // Member datatype (recursive)
+                    let (member_dt, dt_consumed) = Self::decode(&buf[pos..], ctx)?;
+                    pos += dt_consumed;
+
+                    members.push(CompoundMember {
+                        name,
+                        offset,
+                        datatype: member_dt,
+                    });
+                }
+
+                Ok((Self::Compound { size, members }, pos))
+            }
+            CLASS_ENUM => {
+                // Enum: version 1
+                if version != DT_VERSION {
+                    return Err(FormatError::InvalidVersion(version));
+                }
+                let num_members = u16::from_le_bytes([flags0, flags1]) as usize;
+                let base_size = size;
+
+                let mut pos = 8;
+
+                // Base datatype
+                let (base_dt, base_consumed) = Self::decode(&buf[pos..], ctx)?;
+                pos += base_consumed;
+
+                // Member names (null-terminated, padded to 8-byte boundary for v1)
+                let mut names = Vec::with_capacity(num_members);
+                for _ in 0..num_members {
+                    let name_start = pos;
+                    while pos < buf.len() && buf[pos] != 0 {
+                        pos += 1;
+                    }
+                    if pos >= buf.len() {
+                        return Err(FormatError::InvalidData(
+                            "unterminated enum member name".into(),
+                        ));
+                    }
+                    let name = String::from_utf8_lossy(&buf[name_start..pos]).to_string();
+                    pos += 1; // skip null
+                    // Version 1: pad name (including null) to 8-byte boundary
+                    let name_field_len = pos - name_start;
+                    let padded = (name_field_len + 7) & !7;
+                    pos = name_start + padded;
+                    names.push(name);
+                }
+
+                // Member values (base_size bytes each)
+                let mut members = Vec::with_capacity(num_members);
+                for name in names {
+                    if pos + base_size as usize > buf.len() {
+                        return Err(FormatError::BufferTooShort {
+                            needed: pos + base_size as usize,
+                            available: buf.len(),
+                        });
+                    }
+                    let value = buf[pos..pos + base_size as usize].to_vec();
+                    pos += base_size as usize;
+                    members.push(EnumMember { name, value });
+                }
+
+                Ok((
+                    Self::Enum {
+                        base: Box::new(base_dt),
+                        members,
+                    },
+                    pos,
+                ))
+            }
+            CLASS_VLEN => {
+                // Variable-length: version 1
+                if version != DT_VERSION {
+                    return Err(FormatError::InvalidVersion(version));
+                }
+                let vlen_type = flags0 & 0x0F;
+                let charset = flags1 & 0x0F;
+
+                let mut pos = 8;
+
+                // Properties: base datatype
+                let (_base_dt, base_consumed) = Self::decode(&buf[pos..], ctx)?;
+                pos += base_consumed;
+
+                if vlen_type == 1 {
+                    // String type
+                    Ok((Self::VarLenString { charset }, pos))
+                } else {
+                    // Sequence type -- treat as unsupported for now
+                    Err(FormatError::UnsupportedFeature(format!(
+                        "vlen sequence type {}",
+                        vlen_type
+                    )))
+                }
+            }
+            CLASS_ARRAY => {
+                // Array: version 3
+                if version != 3 && version != 2 {
+                    return Err(FormatError::UnsupportedFeature(format!(
+                        "array datatype version {}",
+                        version
+                    )));
+                }
+                let mut pos = 8;
+
+                // ndims: u8
+                if pos >= buf.len() {
+                    return Err(FormatError::BufferTooShort {
+                        needed: pos + 1,
+                        available: buf.len(),
+                    });
+                }
+                let ndims = buf[pos] as usize;
+                pos += 1;
+
+                // Version 2 has 3 bytes of padding after ndims
+                if version == 2 {
+                    pos += 3;
+                }
+
+                // dims: ndims * u32 LE
+                if pos + ndims * 4 > buf.len() {
+                    return Err(FormatError::BufferTooShort {
+                        needed: pos + ndims * 4,
+                        available: buf.len(),
+                    });
+                }
+                let mut dims = Vec::with_capacity(ndims);
+                for _ in 0..ndims {
+                    let d = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+                    pos += 4;
+                    dims.push(d);
+                }
+
+                // Version 2 has permutation indices after dims (ndims * u32), skip them
+                if version == 2 {
+                    pos += ndims * 4;
+                }
+
+                // Base datatype
+                let (base_dt, base_consumed) = Self::decode(&buf[pos..], ctx)?;
+                pos += base_consumed;
+
+                Ok((
+                    Self::Array {
+                        dims,
+                        base: Box::new(base_dt),
+                    },
+                    pos,
                 ))
             }
             _ => Err(FormatError::UnsupportedFeature(format!(
@@ -434,6 +929,13 @@ mod tests {
         FormatContext {
             sizeof_addr: 8,
             sizeof_size: 8,
+        }
+    }
+
+    fn ctx4() -> FormatContext {
+        FormatContext {
+            sizeof_addr: 4,
+            sizeof_size: 4,
         }
     }
 
@@ -635,5 +1137,253 @@ mod tests {
         let utf8 = DatatypeMessage::fixed_string_utf8(5).encode(&ctx());
         assert_eq!(utf8[1] & 0x0F, 0); // padding = null terminate
         assert_eq!((utf8[1] >> 4) & 0x0F, 1); // charset = UTF-8
+    }
+
+    // ---- vlen string roundtrips ----
+
+    #[test]
+    fn roundtrip_vlen_string_utf8() {
+        let msg = DatatypeMessage::vlen_string_utf8();
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn roundtrip_vlen_string_ascii() {
+        let msg = DatatypeMessage::vlen_string_ascii();
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn vlen_string_element_size() {
+        let msg = DatatypeMessage::vlen_string_utf8();
+        // Default: sizeof_addr=8, so 8+4 = 12
+        assert_eq!(msg.element_size(), 12);
+        assert_eq!(msg.element_size_ctx(&ctx()), 12);
+        assert_eq!(msg.element_size_ctx(&ctx4()), 8);
+    }
+
+    #[test]
+    fn vlen_string_class_encoding() {
+        let encoded = DatatypeMessage::vlen_string_utf8().encode(&ctx());
+        assert_eq!(encoded[0] & 0x0F, CLASS_VLEN); // class = 9
+        assert_eq!(encoded[0] >> 4, DT_VERSION);    // version = 1
+        assert_eq!(encoded[1] & 0x0F, 1);           // type = string
+        assert_eq!(encoded[2] & 0x0F, 1);           // charset = UTF-8
+    }
+
+    #[test]
+    fn vlen_string_4byte_ctx() {
+        let c = ctx4();
+        let msg = DatatypeMessage::vlen_string_utf8();
+        let encoded = msg.encode(&c);
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &c).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+        // Size field in the encoded bytes should be 4+4=8
+        let sz = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
+        assert_eq!(sz, 8);
+    }
+
+    // ---- compound roundtrips ----
+
+    #[test]
+    fn roundtrip_compound_simple() {
+        let msg = DatatypeMessage::compound(
+            12, // i32 + f64 = 4 + 8 = 12
+            vec![
+                CompoundMember {
+                    name: "x".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::i32_type(),
+                },
+                CompoundMember {
+                    name: "y".to_string(),
+                    offset: 4,
+                    datatype: DatatypeMessage::f64_type(),
+                },
+            ],
+        );
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn compound_element_size() {
+        let msg = DatatypeMessage::compound(
+            16,
+            vec![
+                CompoundMember {
+                    name: "a".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::u64_type(),
+                },
+                CompoundMember {
+                    name: "b".to_string(),
+                    offset: 8,
+                    datatype: DatatypeMessage::u64_type(),
+                },
+            ],
+        );
+        assert_eq!(msg.element_size(), 16);
+    }
+
+    #[test]
+    fn compound_class_encoding() {
+        let msg = DatatypeMessage::compound(4, vec![
+            CompoundMember {
+                name: "val".to_string(),
+                offset: 0,
+                datatype: DatatypeMessage::i32_type(),
+            },
+        ]);
+        let encoded = msg.encode(&ctx());
+        assert_eq!(encoded[0] & 0x0F, CLASS_COMPOUND); // class = 6
+        assert_eq!(encoded[0] >> 4, 3);                // version = 3
+    }
+
+    #[test]
+    fn roundtrip_compound_nested() {
+        let inner = DatatypeMessage::compound(
+            8,
+            vec![
+                CompoundMember {
+                    name: "re".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::f32_type(),
+                },
+                CompoundMember {
+                    name: "im".to_string(),
+                    offset: 4,
+                    datatype: DatatypeMessage::f32_type(),
+                },
+            ],
+        );
+        let msg = DatatypeMessage::compound(
+            12,
+            vec![
+                CompoundMember {
+                    name: "id".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::u32_type(),
+                },
+                CompoundMember {
+                    name: "value".to_string(),
+                    offset: 4,
+                    datatype: inner,
+                },
+            ],
+        );
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    // ---- enum roundtrips ----
+
+    #[test]
+    fn roundtrip_enum_simple() {
+        let msg = DatatypeMessage::enumeration(
+            DatatypeMessage::u8_type(),
+            vec![
+                EnumMember { name: "RED".to_string(), value: vec![0] },
+                EnumMember { name: "GREEN".to_string(), value: vec![1] },
+                EnumMember { name: "BLUE".to_string(), value: vec![2] },
+            ],
+        );
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn enum_element_size() {
+        let msg = DatatypeMessage::enumeration(
+            DatatypeMessage::i32_type(),
+            vec![
+                EnumMember { name: "A".to_string(), value: vec![0, 0, 0, 0] },
+                EnumMember { name: "B".to_string(), value: vec![1, 0, 0, 0] },
+            ],
+        );
+        assert_eq!(msg.element_size(), 4);
+    }
+
+    #[test]
+    fn enum_class_encoding() {
+        let msg = DatatypeMessage::enumeration(
+            DatatypeMessage::u8_type(),
+            vec![EnumMember { name: "X".to_string(), value: vec![0] }],
+        );
+        let encoded = msg.encode(&ctx());
+        assert_eq!(encoded[0] & 0x0F, CLASS_ENUM);
+        assert_eq!(encoded[0] >> 4, DT_VERSION);
+    }
+
+    // ---- array roundtrips ----
+
+    #[test]
+    fn roundtrip_array_1d() {
+        let msg = DatatypeMessage::array(vec![10], DatatypeMessage::f64_type());
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn roundtrip_array_2d() {
+        let msg = DatatypeMessage::array(vec![3, 4], DatatypeMessage::i32_type());
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn array_element_size() {
+        let msg = DatatypeMessage::array(vec![3, 4], DatatypeMessage::i32_type());
+        assert_eq!(msg.element_size(), 3 * 4 * 4); // 48
+    }
+
+    #[test]
+    fn array_class_encoding() {
+        let msg = DatatypeMessage::array(vec![5], DatatypeMessage::u8_type());
+        let encoded = msg.encode(&ctx());
+        assert_eq!(encoded[0] & 0x0F, CLASS_ARRAY); // class = 10
+        assert_eq!(encoded[0] >> 4, 3);             // version = 3
+    }
+
+    #[test]
+    fn roundtrip_array_of_compound() {
+        let compound = DatatypeMessage::compound(
+            8,
+            vec![
+                CompoundMember {
+                    name: "x".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::f32_type(),
+                },
+                CompoundMember {
+                    name: "y".to_string(),
+                    offset: 4,
+                    datatype: DatatypeMessage::f32_type(),
+                },
+            ],
+        );
+        let msg = DatatypeMessage::array(vec![10], compound);
+        let encoded = msg.encode(&ctx());
+        let (decoded, consumed) = DatatypeMessage::decode(&encoded, &ctx()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded, msg);
+        assert_eq!(msg.element_size(), 80); // 10 * 8
     }
 }

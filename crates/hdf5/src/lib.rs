@@ -11,4 +11,4 @@ pub use file::H5File;
 pub use group::H5Group;
 pub use dataset::H5Dataset;
 pub use attribute::H5Attribute;
-pub use types::{H5Type, VarLenUnicode};
+pub use types::{CompoundType, H5Type, VarLenUnicode};

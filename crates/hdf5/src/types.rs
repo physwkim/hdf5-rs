@@ -104,6 +104,56 @@ impl H5Type for f64 {
     }
 }
 
+/// A description of a compound (struct) type for use with HDF5 datasets.
+///
+/// Users can build compound types manually to describe structured data.
+///
+/// # Example
+///
+/// ```
+/// use hdf5::types::CompoundType;
+/// use hdf5_format::messages::datatype::{DatatypeMessage, CompoundMember};
+///
+/// let ct = CompoundType {
+///     members: vec![
+///         ("x".to_string(), DatatypeMessage::f32_type(), 0),
+///         ("y".to_string(), DatatypeMessage::f32_type(), 4),
+///     ],
+///     total_size: 8,
+/// };
+/// let dt = ct.to_datatype();
+/// assert_eq!(dt.element_size(), 8);
+/// ```
+#[derive(Debug, Clone)]
+pub struct CompoundType {
+    /// Members: (name, datatype, byte_offset).
+    pub members: Vec<(String, DatatypeMessage, u32)>,
+    /// Total size of the compound element in bytes.
+    pub total_size: u32,
+}
+
+impl CompoundType {
+    /// Convert this compound type description to a `DatatypeMessage`.
+    pub fn to_datatype(&self) -> DatatypeMessage {
+        use hdf5_format::messages::datatype::CompoundMember;
+
+        let members = self
+            .members
+            .iter()
+            .map(|(name, dt, offset)| CompoundMember {
+                name: name.clone(),
+                offset: *offset,
+                datatype: dt.clone(),
+            })
+            .collect();
+
+        DatatypeMessage::Compound {
+            size: self.total_size,
+            members,
+        }
+    }
+}
+
 /// A variable-length Unicode string type.
 ///
 /// This type is used as a marker for the `new_attr` builder API.

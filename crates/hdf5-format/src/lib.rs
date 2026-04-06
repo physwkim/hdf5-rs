@@ -4,6 +4,9 @@ pub mod object_header;
 pub mod messages;
 pub mod chunk_index;
 pub mod global_heap;
+pub mod local_heap;
+pub mod symbol_table;
+pub mod btree_v1;
 
 /// Format context carrying file-level encoding parameters
 #[derive(Debug, Clone, Copy)]

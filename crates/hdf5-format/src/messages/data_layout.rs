@@ -76,6 +76,20 @@ impl EarrayParams {
     }
 }
 
+/// Parameters for the fixed array chunk index (max_dblk_page_nelmts_bits).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedArrayParams {
+    pub max_dblk_page_nelmts_bits: u8,
+}
+
+impl FixedArrayParams {
+    pub fn default_params() -> Self {
+        Self {
+            max_dblk_page_nelmts_bits: 0,
+        }
+    }
+}
+
 /// Data layout message payload.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataLayoutMessage {
@@ -100,6 +114,8 @@ pub enum DataLayoutMessage {
         index_type: ChunkIndexType,
         /// Extensible array parameters (present when index_type == ExtensibleArray).
         earray_params: Option<EarrayParams>,
+        /// Fixed array parameters (present when index_type == FixedArray).
+        farray_params: Option<FixedArrayParams>,
         /// Address of the chunk index structure.
         index_address: u64,
     },
@@ -139,6 +155,42 @@ impl DataLayoutMessage {
             chunk_dims,
             index_type: ChunkIndexType::ExtensibleArray,
             earray_params: Some(earray_params),
+            farray_params: None,
+            index_address,
+        }
+    }
+
+    /// Version 4 chunked layout with fixed array index.
+    ///
+    /// `chunk_dims` should include the trailing element-size dimension.
+    pub fn chunked_v4_farray(
+        chunk_dims: Vec<u64>,
+        farray_params: FixedArrayParams,
+        index_address: u64,
+    ) -> Self {
+        Self::ChunkedV4 {
+            flags: 0,
+            chunk_dims,
+            index_type: ChunkIndexType::FixedArray,
+            earray_params: None,
+            farray_params: Some(farray_params),
+            index_address,
+        }
+    }
+
+    /// Version 4 chunked layout with B-tree v2 index.
+    ///
+    /// `chunk_dims` should include the trailing element-size dimension.
+    pub fn chunked_v4_btree_v2(
+        chunk_dims: Vec<u64>,
+        index_address: u64,
+    ) -> Self {
+        Self::ChunkedV4 {
+            flags: 0,
+            chunk_dims,
+            index_type: ChunkIndexType::BTreeV2,
+            earray_params: None,
+            farray_params: None,
             index_address,
         }
     }
@@ -152,6 +204,7 @@ impl DataLayoutMessage {
             chunk_dims,
             index_type: ChunkIndexType::SingleChunk,
             earray_params: None,
+            farray_params: None,
             index_address,
         }
     }
@@ -183,6 +236,7 @@ impl DataLayoutMessage {
                 chunk_dims,
                 index_type,
                 earray_params,
+                farray_params,
                 index_address,
             } => {
                 let sa = ctx.sizeof_addr as usize;
@@ -208,15 +262,24 @@ impl DataLayoutMessage {
                 // Index type
                 buf.push(*index_type as u8);
 
-                // Extensible array parameters
-                if *index_type == ChunkIndexType::ExtensibleArray {
-                    if let Some(ref params) = earray_params {
-                        buf.push(params.max_nelmts_bits);
-                        buf.push(params.idx_blk_elmts);
-                        buf.push(params.sup_blk_min_data_ptrs);
-                        buf.push(params.data_blk_min_elmts);
-                        buf.push(params.max_dblk_page_nelmts_bits);
+                // Index-type-specific parameters
+                match *index_type {
+                    ChunkIndexType::ExtensibleArray => {
+                        if let Some(ref params) = earray_params {
+                            buf.push(params.max_nelmts_bits);
+                            buf.push(params.idx_blk_elmts);
+                            buf.push(params.sup_blk_min_data_ptrs);
+                            buf.push(params.data_blk_min_elmts);
+                            buf.push(params.max_dblk_page_nelmts_bits);
+                        }
                     }
+                    ChunkIndexType::FixedArray => {
+                        if let Some(ref params) = farray_params {
+                            buf.push(params.max_dblk_page_nelmts_bits);
+                        }
+                    }
+                    // BTreeV2, SingleChunk, Implicit: no extra parameters
+                    _ => {}
                 }
 
                 // Index address
@@ -321,26 +384,42 @@ impl DataLayoutMessage {
                         format!("chunk index type {}", idx_type_raw)
                     ))?;
 
-                // earray params
-                let earray_params = if index_type == ChunkIndexType::ExtensibleArray {
-                    if buf.len() < pos + 5 {
-                        return Err(FormatError::BufferTooShort {
-                            needed: pos + 5,
-                            available: buf.len(),
+                // Index-type-specific parameters
+                let mut earray_params = None;
+                let mut farray_params = None;
+
+                match index_type {
+                    ChunkIndexType::ExtensibleArray => {
+                        if buf.len() < pos + 5 {
+                            return Err(FormatError::BufferTooShort {
+                                needed: pos + 5,
+                                available: buf.len(),
+                            });
+                        }
+                        earray_params = Some(EarrayParams {
+                            max_nelmts_bits: buf[pos],
+                            idx_blk_elmts: buf[pos + 1],
+                            sup_blk_min_data_ptrs: buf[pos + 2],
+                            data_blk_min_elmts: buf[pos + 3],
+                            max_dblk_page_nelmts_bits: buf[pos + 4],
                         });
+                        pos += 5;
                     }
-                    let params = EarrayParams {
-                        max_nelmts_bits: buf[pos],
-                        idx_blk_elmts: buf[pos + 1],
-                        sup_blk_min_data_ptrs: buf[pos + 2],
-                        data_blk_min_elmts: buf[pos + 3],
-                        max_dblk_page_nelmts_bits: buf[pos + 4],
-                    };
-                    pos += 5;
-                    Some(params)
-                } else {
-                    None
-                };
+                    ChunkIndexType::FixedArray => {
+                        if buf.len() < pos + 1 {
+                            return Err(FormatError::BufferTooShort {
+                                needed: pos + 1,
+                                available: buf.len(),
+                            });
+                        }
+                        farray_params = Some(FixedArrayParams {
+                            max_dblk_page_nelmts_bits: buf[pos],
+                        });
+                        pos += 1;
+                    }
+                    // BTreeV2, SingleChunk, Implicit: no extra parameters
+                    _ => {}
+                }
 
                 // index address
                 if buf.len() < pos + sa {
@@ -357,6 +436,7 @@ impl DataLayoutMessage {
                     chunk_dims,
                     index_type,
                     earray_params,
+                    farray_params,
                     index_address,
                 }, pos))
             }

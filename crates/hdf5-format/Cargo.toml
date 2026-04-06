@@ -9,7 +9,9 @@ repository.workspace = true
 
 [dependencies]
 flate2 = { version = "1", optional = true }
+rayon = { version = "1", optional = true }
 
 [features]
 default = ["deflate"]
 deflate = ["flate2"]
+parallel = ["rayon"]

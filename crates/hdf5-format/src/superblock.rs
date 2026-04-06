@@ -1,10 +1,14 @@
-/// Superblock v2/v3 encode/decode for HDF5 files.
+/// Superblock encode/decode for HDF5 files.
 ///
 /// The superblock is always at offset 0 (or at a user-hint offset) and
 /// contains the file-level metadata: version, size parameters, and addresses
 /// of the root group and end-of-file.
+///
+/// This module supports:
+/// - v2/v3 superblocks (encode + decode)
+/// - v0/v1 superblocks (decode only, for reading legacy files)
 use crate::checksum::checksum_metadata;
-use crate::{FormatError, FormatResult};
+use crate::{FormatError, FormatResult, UNDEF_ADDR};
 
 /// The 8-byte HDF5 file signature that begins every superblock.
 pub const HDF5_SIGNATURE: [u8; 8] = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -339,5 +343,392 @@ mod tests {
         encoded.extend_from_slice(&[0xAA; 100]); // trailing garbage
         let decoded = SuperblockV2V3::decode(&encoded).unwrap();
         assert_eq!(decoded, sb);
+    }
+}
+
+// =========================================================================
+// Superblock v0/v1 — decode only (for reading legacy HDF5 files)
+// =========================================================================
+
+/// Symbol table entry, as stored in the root group's superblock (v0/v1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolTableEntry {
+    /// Offset of the name in the local heap.
+    pub name_offset: u64,
+    /// Address of the object header.
+    pub obj_header_addr: u64,
+    /// Cache type: 0 = nothing cached, 1 = symbol table (group).
+    pub cache_type: u32,
+    /// If cache_type == 1: B-tree address for group children.
+    pub btree_addr: u64,
+    /// If cache_type == 1: local heap address for group names.
+    pub heap_addr: u64,
+}
+
+/// Superblock v0/v1 structure (decode only).
+///
+/// Layout after 8-byte signature:
+/// ```text
+/// Byte 0: superblock version (0 or 1)
+/// Byte 1: free-space version (0)
+/// Byte 2: root group STE version (0)
+/// Byte 3: reserved (0)
+/// Byte 4: shared header version (0)
+/// Byte 5: sizeof_addr
+/// Byte 6: sizeof_size
+/// Byte 7: reserved (0)
+/// Bytes 8-9: sym_leaf_k (u16 LE)
+/// Bytes 10-11: btree_internal_k (u16 LE)
+/// Bytes 12-15: file_consistency_flags (u32 LE)
+/// [v1 only: bytes 16-17: indexed_storage_k (u16 LE), bytes 18-19: reserved]
+/// Then: base_addr(O), extension_addr(O), eof_addr(O), driver_addr(O)
+/// Then: root group symbol table entry
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuperblockV0V1 {
+    pub version: u8,
+    pub sizeof_offsets: u8,
+    pub sizeof_lengths: u8,
+    pub file_consistency_flags: u32,
+    pub sym_leaf_k: u16,
+    pub btree_internal_k: u16,
+    pub indexed_storage_k: Option<u16>,
+    pub base_address: u64,
+    pub superblock_extension_address: u64,
+    pub end_of_file_address: u64,
+    pub driver_info_address: u64,
+    pub root_symbol_table_entry: SymbolTableEntry,
+}
+
+impl SuperblockV0V1 {
+    /// Decode a v0/v1 superblock from `buf`. The buffer must start at the
+    /// 8-byte HDF5 signature. Returns the parsed superblock.
+    pub fn decode(buf: &[u8]) -> FormatResult<Self> {
+        // Minimum: 8 (sig) + 8 (fixed header before addresses) = 16
+        if buf.len() < 16 {
+            return Err(FormatError::BufferTooShort {
+                needed: 16,
+                available: buf.len(),
+            });
+        }
+
+        // Signature
+        if buf[0..8] != HDF5_SIGNATURE {
+            return Err(FormatError::InvalidSignature);
+        }
+
+        let version = buf[8];
+        if version != 0 && version != 1 {
+            return Err(FormatError::InvalidVersion(version));
+        }
+
+        // buf[9] = free-space version (must be 0)
+        // buf[10] = root group STE version (must be 0)
+        // buf[11] = reserved
+        // buf[12] = shared header version (must be 0)
+        let sizeof_offsets = buf[13];
+        let sizeof_lengths = buf[14];
+        // buf[15] = reserved
+
+        let o = sizeof_offsets as usize;
+        let mut pos = 16;
+
+        // Check we have enough for the remaining fixed fields
+        if buf.len() < pos + 4 {
+            return Err(FormatError::BufferTooShort {
+                needed: pos + 4,
+                available: buf.len(),
+            });
+        }
+
+        let sym_leaf_k = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
+        pos += 2;
+        let btree_internal_k = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
+        pos += 2;
+
+        if buf.len() < pos + 4 {
+            return Err(FormatError::BufferTooShort {
+                needed: pos + 4,
+                available: buf.len(),
+            });
+        }
+        let file_consistency_flags = u32::from_le_bytes([
+            buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3],
+        ]);
+        pos += 4;
+
+        let indexed_storage_k = if version == 1 {
+            if buf.len() < pos + 4 {
+                return Err(FormatError::BufferTooShort {
+                    needed: pos + 4,
+                    available: buf.len(),
+                });
+            }
+            let k = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
+            pos += 2;
+            // 2 bytes reserved
+            pos += 2;
+            Some(k)
+        } else {
+            None
+        };
+
+        // 4 addresses, each sizeof_offsets bytes
+        let needed = pos + 4 * o;
+        if buf.len() < needed {
+            return Err(FormatError::BufferTooShort {
+                needed,
+                available: buf.len(),
+            });
+        }
+
+        let base_address = decode_offset(buf, &mut pos, o);
+        let superblock_extension_address = decode_offset(buf, &mut pos, o);
+        let end_of_file_address = decode_offset(buf, &mut pos, o);
+        let driver_info_address = decode_offset(buf, &mut pos, o);
+
+        // Root group symbol table entry
+        let ste = decode_symbol_table_entry(buf, &mut pos, o, sizeof_lengths as usize)?;
+
+        Ok(SuperblockV0V1 {
+            version,
+            sizeof_offsets,
+            sizeof_lengths,
+            file_consistency_flags,
+            sym_leaf_k,
+            btree_internal_k,
+            indexed_storage_k,
+            base_address,
+            superblock_extension_address,
+            end_of_file_address,
+            driver_info_address,
+            root_symbol_table_entry: ste,
+        })
+    }
+}
+
+/// Decode a symbol table entry from buf at the given position.
+pub fn decode_symbol_table_entry(
+    buf: &[u8],
+    pos: &mut usize,
+    sizeof_addr: usize,
+    sizeof_size: usize,
+) -> FormatResult<SymbolTableEntry> {
+    let needed = *pos + sizeof_size + sizeof_addr + 4 + 4 + 16;
+    if buf.len() < needed {
+        return Err(FormatError::BufferTooShort {
+            needed,
+            available: buf.len(),
+        });
+    }
+
+    let name_offset = decode_offset(buf, pos, sizeof_size);
+    let obj_header_addr = decode_offset(buf, pos, sizeof_addr);
+    let cache_type = u32::from_le_bytes([
+        buf[*pos], buf[*pos + 1], buf[*pos + 2], buf[*pos + 3],
+    ]);
+    *pos += 4;
+    // reserved u32
+    *pos += 4;
+
+    // Scratch pad: 16 bytes
+    let (btree_addr, heap_addr) = if cache_type == 1 {
+        let btree = decode_offset(buf, pos, sizeof_addr);
+        let heap = decode_offset(buf, pos, sizeof_addr);
+        // Skip remaining scratch pad bytes
+        let used = 2 * sizeof_addr;
+        if used < 16 {
+            *pos += 16 - used;
+        }
+        (btree, heap)
+    } else {
+        *pos += 16;
+        (UNDEF_ADDR, UNDEF_ADDR)
+    };
+
+    Ok(SymbolTableEntry {
+        name_offset,
+        obj_header_addr,
+        cache_type,
+        btree_addr,
+        heap_addr,
+    })
+}
+
+/// Detect the superblock version from the first 9+ bytes of a file.
+/// Returns the version byte (0, 1, 2, or 3).
+pub fn detect_superblock_version(buf: &[u8]) -> FormatResult<u8> {
+    if buf.len() < 9 {
+        return Err(FormatError::BufferTooShort {
+            needed: 9,
+            available: buf.len(),
+        });
+    }
+    if buf[0..8] != HDF5_SIGNATURE {
+        return Err(FormatError::InvalidSignature);
+    }
+    Ok(buf[8])
+}
+
+#[cfg(test)]
+mod tests_v0v1 {
+    use super::*;
+
+    /// Build a minimal v0 superblock for testing.
+    fn build_v0_superblock(
+        root_obj_header_addr: u64,
+        btree_addr: u64,
+        heap_addr: u64,
+        eof: u64,
+    ) -> Vec<u8> {
+        let sizeof_addr: usize = 8;
+        let sizeof_size: usize = 8;
+        let mut buf = Vec::new();
+
+        // Signature (8 bytes)
+        buf.extend_from_slice(&HDF5_SIGNATURE);
+        // Version 0
+        buf.push(0);
+        // Free-space version
+        buf.push(0);
+        // Root group STE version
+        buf.push(0);
+        // Reserved
+        buf.push(0);
+        // Shared header version
+        buf.push(0);
+        // sizeof_addr
+        buf.push(sizeof_addr as u8);
+        // sizeof_size
+        buf.push(sizeof_size as u8);
+        // Reserved
+        buf.push(0);
+
+        // sym_leaf_k = 4
+        buf.extend_from_slice(&4u16.to_le_bytes());
+        // btree_internal_k = 32
+        buf.extend_from_slice(&32u16.to_le_bytes());
+        // file_consistency_flags = 0
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        // base_addr = 0
+        buf.extend_from_slice(&0u64.to_le_bytes()[..sizeof_addr]);
+        // extension_addr = UNDEF
+        buf.extend_from_slice(&UNDEF_ADDR.to_le_bytes()[..sizeof_addr]);
+        // eof_addr
+        buf.extend_from_slice(&eof.to_le_bytes()[..sizeof_addr]);
+        // driver_info_addr = UNDEF
+        buf.extend_from_slice(&UNDEF_ADDR.to_le_bytes()[..sizeof_addr]);
+
+        // Root group symbol table entry:
+        // name_offset (sizeof_size)
+        buf.extend_from_slice(&0u64.to_le_bytes()[..sizeof_size]);
+        // obj_header_addr (sizeof_addr)
+        buf.extend_from_slice(&root_obj_header_addr.to_le_bytes()[..sizeof_addr]);
+        // cache_type = 1 (stab)
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        // reserved
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        // scratch pad: btree_addr + heap_addr
+        buf.extend_from_slice(&btree_addr.to_le_bytes()[..sizeof_addr]);
+        buf.extend_from_slice(&heap_addr.to_le_bytes()[..sizeof_addr]);
+
+        buf
+    }
+
+    #[test]
+    fn test_decode_v0() {
+        let buf = build_v0_superblock(0x100, 0x200, 0x300, 0x1000);
+        let sb = SuperblockV0V1::decode(&buf).expect("decode failed");
+        assert_eq!(sb.version, 0);
+        assert_eq!(sb.sizeof_offsets, 8);
+        assert_eq!(sb.sizeof_lengths, 8);
+        assert_eq!(sb.sym_leaf_k, 4);
+        assert_eq!(sb.btree_internal_k, 32);
+        assert_eq!(sb.file_consistency_flags, 0);
+        assert_eq!(sb.indexed_storage_k, None);
+        assert_eq!(sb.base_address, 0);
+        assert_eq!(sb.end_of_file_address, 0x1000);
+        assert_eq!(sb.root_symbol_table_entry.obj_header_addr, 0x100);
+        assert_eq!(sb.root_symbol_table_entry.cache_type, 1);
+        assert_eq!(sb.root_symbol_table_entry.btree_addr, 0x200);
+        assert_eq!(sb.root_symbol_table_entry.heap_addr, 0x300);
+    }
+
+    #[test]
+    fn test_decode_v1() {
+        // Build a v1 superblock (includes indexed_storage_k)
+        let sizeof_addr: usize = 8;
+        let sizeof_size: usize = 8;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&HDF5_SIGNATURE);
+        buf.push(1); // version 1
+        buf.push(0); buf.push(0); buf.push(0); buf.push(0);
+        buf.push(sizeof_addr as u8);
+        buf.push(sizeof_size as u8);
+        buf.push(0);
+        buf.extend_from_slice(&4u16.to_le_bytes());
+        buf.extend_from_slice(&32u16.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        // indexed_storage_k = 16
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        // reserved
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        // addresses
+        buf.extend_from_slice(&0u64.to_le_bytes()[..sizeof_addr]);
+        buf.extend_from_slice(&UNDEF_ADDR.to_le_bytes()[..sizeof_addr]);
+        buf.extend_from_slice(&0x2000u64.to_le_bytes()[..sizeof_addr]);
+        buf.extend_from_slice(&UNDEF_ADDR.to_le_bytes()[..sizeof_addr]);
+        // STE
+        buf.extend_from_slice(&0u64.to_le_bytes()[..sizeof_size]);
+        buf.extend_from_slice(&0x100u64.to_le_bytes()[..sizeof_addr]);
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&0x200u64.to_le_bytes()[..sizeof_addr]);
+        buf.extend_from_slice(&0x300u64.to_le_bytes()[..sizeof_addr]);
+
+        let sb = SuperblockV0V1::decode(&buf).expect("decode failed");
+        assert_eq!(sb.version, 1);
+        assert_eq!(sb.indexed_storage_k, Some(16));
+        assert_eq!(sb.root_symbol_table_entry.btree_addr, 0x200);
+    }
+
+    #[test]
+    fn test_detect_version() {
+        let v0 = build_v0_superblock(0x100, 0x200, 0x300, 0x1000);
+        assert_eq!(detect_superblock_version(&v0).unwrap(), 0);
+
+        let sb_v3 = SuperblockV2V3 {
+            version: SUPERBLOCK_V3,
+            sizeof_offsets: 8,
+            sizeof_lengths: 8,
+            file_consistency_flags: 0,
+            base_address: 0,
+            superblock_extension_address: UNDEF_ADDR,
+            end_of_file_address: 4096,
+            root_group_object_header_address: 48,
+        };
+        let v3 = sb_v3.encode();
+        assert_eq!(detect_superblock_version(&v3).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_bad_sig() {
+        let mut buf = build_v0_superblock(0x100, 0x200, 0x300, 0x1000);
+        buf[0] = 0;
+        assert!(matches!(
+            SuperblockV0V1::decode(&buf).unwrap_err(),
+            FormatError::InvalidSignature
+        ));
+    }
+
+    #[test]
+    fn test_bad_version() {
+        let mut buf = build_v0_superblock(0x100, 0x200, 0x300, 0x1000);
+        buf[8] = 5; // invalid version
+        assert!(matches!(
+            SuperblockV0V1::decode(&buf).unwrap_err(),
+            FormatError::InvalidVersion(5)
+        ));
     }
 }

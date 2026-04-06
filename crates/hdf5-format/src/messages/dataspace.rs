@@ -16,7 +16,7 @@ const FLAG_MAX_DIMS: u8 = 0x01;
 /// Dataspace type field values.
 const DS_TYPE_SCALAR: u8 = 0;
 const DS_TYPE_SIMPLE: u8 = 1;
-const DS_TYPE_NULL: u8 = 2;
+const _DS_TYPE_NULL: u8 = 2;
 
 /// Dataspace message payload.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,10 +103,15 @@ impl DataspaceMessage {
         }
 
         let version = buf[0];
-        if version != VERSION {
-            return Err(FormatError::InvalidVersion(version));
+        match version {
+            1 => Self::decode_v1(buf, ctx),
+            VERSION => Self::decode_v2(buf, ctx),
+            _ => Err(FormatError::InvalidVersion(version)),
         }
+    }
 
+    /// Decode version 2 dataspace message.
+    fn decode_v2(buf: &[u8], ctx: &FormatContext) -> FormatResult<(Self, usize)> {
         let ndims = buf[1] as usize;
         let flags = buf[2];
         let _ds_type = buf[3]; // type byte: 0=scalar, 1=simple, 2=null
@@ -139,6 +144,75 @@ impl DataspaceMessage {
         } else {
             None
         };
+
+        Ok((Self { dims, max_dims }, pos))
+    }
+
+    /// Decode version 1 dataspace message.
+    ///
+    /// Version 1 layout:
+    /// ```text
+    /// Byte 0: version = 1
+    /// Byte 1: ndims
+    /// Byte 2: flags (bit 0 = max dims present, bit 1 = permutation indices present)
+    /// Byte 3: reserved
+    /// Bytes 4-7: reserved (4 bytes)
+    /// Then ndims * sizeof_size bytes for current dimensions
+    /// Then (if flag bit 0) ndims * sizeof_size bytes for max dimensions
+    /// Then (if flag bit 1) ndims * sizeof_size bytes for permutation indices
+    /// ```
+    fn decode_v1(buf: &[u8], ctx: &FormatContext) -> FormatResult<(Self, usize)> {
+        if buf.len() < 8 {
+            return Err(FormatError::BufferTooShort {
+                needed: 8,
+                available: buf.len(),
+            });
+        }
+
+        let ndims = buf[1] as usize;
+        let flags = buf[2];
+        let has_max = (flags & FLAG_MAX_DIMS) != 0;
+        let has_perm = (flags & 0x02) != 0;
+        let ss = ctx.sizeof_size as usize;
+
+        // Header is 8 bytes for v1 (4 fixed + 4 reserved)
+        let mut needed = 8 + ndims * ss;
+        if has_max {
+            needed += ndims * ss;
+        }
+        if has_perm {
+            needed += ndims * ss;
+        }
+        if buf.len() < needed {
+            return Err(FormatError::BufferTooShort {
+                needed,
+                available: buf.len(),
+            });
+        }
+
+        let mut pos = 8; // skip version(1) + ndims(1) + flags(1) + reserved(1) + reserved(4)
+
+        let mut dims = Vec::with_capacity(ndims);
+        for _ in 0..ndims {
+            dims.push(read_size(&buf[pos..], ss));
+            pos += ss;
+        }
+
+        let max_dims = if has_max {
+            let mut v = Vec::with_capacity(ndims);
+            for _ in 0..ndims {
+                v.push(read_size(&buf[pos..], ss));
+                pos += ss;
+            }
+            Some(v)
+        } else {
+            None
+        };
+
+        // Skip permutation indices if present
+        if has_perm {
+            pos += ndims * ss;
+        }
 
         Ok((Self { dims, max_dims }, pos))
     }
@@ -228,12 +302,48 @@ mod tests {
 
     #[test]
     fn decode_bad_version() {
-        let buf = [1u8, 0, 0, 0]; // version 1 — unsupported here
+        let buf = [99u8, 0, 0, 0]; // version 99 — unsupported
         let err = DataspaceMessage::decode(&buf, &ctx8()).unwrap_err();
         match err {
-            FormatError::InvalidVersion(1) => {}
+            FormatError::InvalidVersion(99) => {}
             other => panic!("unexpected error: {:?}", other),
         }
+    }
+
+    #[test]
+    fn decode_v1_simple_1d() {
+        // Build a version 1 dataspace: 1D, dims=[100], no max
+        let mut buf = Vec::new();
+        buf.push(1); // version 1
+        buf.push(1); // ndims = 1
+        buf.push(0); // flags (no max dims)
+        buf.push(0); // reserved
+        buf.extend_from_slice(&[0u8; 4]); // reserved (4 bytes)
+        buf.extend_from_slice(&100u64.to_le_bytes()); // dims[0] = 100
+
+        let (msg, consumed) = DataspaceMessage::decode(&buf, &ctx8()).unwrap();
+        assert_eq!(consumed, 16); // 8 header + 8 dim
+        assert_eq!(msg.dims, vec![100]);
+        assert_eq!(msg.max_dims, None);
+    }
+
+    #[test]
+    fn decode_v1_with_max_dims() {
+        let mut buf = Vec::new();
+        buf.push(1); // version 1
+        buf.push(2); // ndims = 2
+        buf.push(1); // flags = has max dims
+        buf.push(0); // reserved
+        buf.extend_from_slice(&[0u8; 4]); // reserved
+        buf.extend_from_slice(&10u64.to_le_bytes()); // dims[0] = 10
+        buf.extend_from_slice(&20u64.to_le_bytes()); // dims[1] = 20
+        buf.extend_from_slice(&u64::MAX.to_le_bytes()); // max_dims[0] = unlimited
+        buf.extend_from_slice(&100u64.to_le_bytes()); // max_dims[1] = 100
+
+        let (msg, consumed) = DataspaceMessage::decode(&buf, &ctx8()).unwrap();
+        assert_eq!(consumed, 40); // 8 + 2*8 + 2*8
+        assert_eq!(msg.dims, vec![10, 20]);
+        assert_eq!(msg.max_dims, Some(vec![u64::MAX, 100]));
     }
 
     #[test]

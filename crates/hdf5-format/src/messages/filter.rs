@@ -252,6 +252,32 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
     }
 }
 
+/// Compress multiple chunks in parallel using rayon.
+///
+/// Each chunk is independently compressed through the filter pipeline.
+/// If compression of a chunk fails, the original (uncompressed) data is used.
+#[cfg(feature = "parallel")]
+pub fn apply_filters_parallel(pipeline: &FilterPipeline, chunks: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    use rayon::prelude::*;
+    chunks
+        .par_iter()
+        .map(|chunk| apply_filters(pipeline, chunk).unwrap_or_else(|_| chunk.clone()))
+        .collect()
+}
+
+/// Decompress multiple chunks in parallel using rayon.
+///
+/// Each chunk is independently decompressed through the reversed filter pipeline.
+/// If decompression of a chunk fails, the original data is used.
+#[cfg(feature = "parallel")]
+pub fn reverse_filters_parallel(pipeline: &FilterPipeline, chunks: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    use rayon::prelude::*;
+    chunks
+        .par_iter()
+        .map(|chunk| reverse_filters(pipeline, chunk).unwrap_or_else(|_| chunk.clone()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +372,27 @@ mod tests {
         let compressed = apply_filters(&pipeline, &original).unwrap();
         let decompressed = reverse_filters(&pipeline, &compressed).unwrap();
         assert_eq!(decompressed, original);
+    }
+
+    #[cfg(all(feature = "deflate", feature = "parallel"))]
+    #[test]
+    fn parallel_compress_decompress_roundtrip() {
+        let pipeline = FilterPipeline::deflate(6);
+        let chunks: Vec<Vec<u8>> = (0..8)
+            .map(|i| vec![(i as u8).wrapping_mul(42); 1024])
+            .collect();
+
+        let compressed = apply_filters_parallel(&pipeline, &chunks);
+        assert_eq!(compressed.len(), 8);
+        // Each compressed chunk should be smaller (repeated data compresses well)
+        for c in &compressed {
+            assert!(c.len() < 1024);
+        }
+
+        let decompressed = reverse_filters_parallel(&pipeline, &compressed);
+        assert_eq!(decompressed.len(), 8);
+        for (original, decoded) in chunks.iter().zip(decompressed.iter()) {
+            assert_eq!(original, decoded);
+        }
     }
 }
