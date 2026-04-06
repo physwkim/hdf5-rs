@@ -24,6 +24,7 @@ use hdf5_io::{Hdf5Reader, Hdf5Writer};
 
 use crate::dataset::{DatasetBuilder, H5Dataset};
 use crate::error::{Hdf5Error, Result};
+use crate::group::H5Group;
 use crate::types::H5Type;
 
 /// The inner state of an HDF5 file, shared with datasets via `Rc<RefCell<>>`.
@@ -58,6 +59,13 @@ impl H5File {
         Ok(Self {
             inner: Rc::new(RefCell::new(H5FileInner::Reader(reader))),
         })
+    }
+
+    /// Return a handle to the root group.
+    ///
+    /// The root group can be used to create datasets and sub-groups.
+    pub fn root_group(&self) -> H5Group {
+        H5Group::new(Rc::clone(&self.inner), "/".to_string())
     }
 
     /// Start building a new dataset with the given element type.

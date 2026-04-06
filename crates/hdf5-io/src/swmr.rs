@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use hdf5_format::messages::datatype::DatatypeMessage;
+use hdf5_format::superblock::{FLAG_SWMR_WRITE, FLAG_WRITE_ACCESS};
 
 use crate::writer::Hdf5Writer;
 use crate::IoResult;
@@ -19,13 +20,17 @@ use crate::IoResult;
 /// updates the index structures with ordered flushes.
 pub struct SwmrWriter {
     writer: Hdf5Writer,
+    swmr_active: bool,
 }
 
 impl SwmrWriter {
     /// Create a new HDF5 file configured for SWMR.
     pub fn create(path: &Path) -> IoResult<Self> {
         let writer = Hdf5Writer::create(path)?;
-        Ok(Self { writer })
+        Ok(Self {
+            writer,
+            swmr_active: false,
+        })
     }
 
     /// Create a streaming dataset (chunked, unlimited first dim).
@@ -53,10 +58,15 @@ impl SwmrWriter {
         self.writer.create_chunked_dataset(name, datatype, &dims, &max_dims, &chunk_dims)
     }
 
-    /// Set the SWMR flag in the superblock (called before readers open the file).
+    /// Set the SWMR flag in the superblock.
+    ///
+    /// This performs a full finalize: writes all dataset object headers, the
+    /// root group, and the superblock with SWMR flags. After this call,
+    /// readers can open the file in SWMR mode. Subsequent data writes use
+    /// in-place header updates via `flush()`.
     pub fn start_swmr(&mut self) -> IoResult<()> {
-        // SWMR flag will be set when we write the superblock during flush/close.
-        // For now this is a no-op -- the superblock is written at close time.
+        self.writer.finalize_for_swmr()?;
+        self.swmr_active = true;
         Ok(())
     }
 
@@ -82,13 +92,34 @@ impl SwmrWriter {
     }
 
     /// Flush with ordered semantics for SWMR safety.
+    ///
+    /// Performs ordered fsyncs:
+    /// 1. Flush EA index structures -> fsync
+    /// 2. Re-write dataset object headers in place (updated dataspace) -> fsync
+    /// 3. Re-write superblock (updated EOF) -> fsync
     pub fn flush(&mut self) -> IoResult<()> {
-        // Flush all chunked datasets
+        // Step 1: Flush EA index structures for all chunked datasets.
         for i in 0..self.writer.datasets.len() {
             if self.writer.datasets[i].chunked.is_some() {
                 self.writer.flush_dataset(i)?;
             }
         }
+        self.writer.handle().sync_data()?;
+
+        if self.swmr_active {
+            // Step 2: Re-write dataset object headers in place with updated dims.
+            for i in 0..self.writer.datasets.len() {
+                if self.writer.datasets[i].obj_header_written_addr.is_some() {
+                    self.writer.write_dataset_header_inplace(i)?;
+                }
+            }
+            self.writer.handle().sync_data()?;
+
+            // Step 3: Re-write superblock with updated EOF.
+            self.writer.write_superblock(FLAG_WRITE_ACCESS | FLAG_SWMR_WRITE)?;
+            self.writer.handle().sync_data()?;
+        }
+
         Ok(())
     }
 

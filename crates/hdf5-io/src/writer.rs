@@ -44,6 +44,10 @@ pub struct DatasetInfo {
     pub chunked: Option<ChunkedDatasetInfo>,
     /// Attributes attached to this dataset.
     pub attributes: Vec<AttributeMessage>,
+    /// File offset where the dataset object header was written (for SWMR in-place rewrites).
+    pub obj_header_written_addr: Option<u64>,
+    /// Encoded size of the dataset object header (for verifying in-place rewrites fit).
+    pub obj_header_encoded_size: usize,
 }
 
 /// Runtime metadata for a chunked dataset.
@@ -83,6 +87,10 @@ pub struct Hdf5Writer {
     ctx: FormatContext,
     pub(crate) datasets: Vec<DatasetInfo>,
     closed: bool,
+    /// Address of the root group object header (set after first finalize).
+    root_group_addr: Option<u64>,
+    /// Size of the encoded root group object header (for in-place rewrites).
+    root_group_encoded_size: usize,
 }
 
 impl Hdf5Writer {
@@ -116,6 +124,8 @@ impl Hdf5Writer {
             ctx,
             datasets: Vec::new(),
             closed: false,
+            root_group_addr: None,
+            root_group_encoded_size: 0,
         })
     }
 
@@ -158,6 +168,8 @@ impl Hdf5Writer {
             data_size,
             chunked: None,
             attributes: Vec::new(),
+            obj_header_written_addr: None,
+            obj_header_encoded_size: 0,
         });
 
         Ok(idx)
@@ -232,6 +244,8 @@ impl Hdf5Writer {
             data_addr: UNDEF_ADDR,
             data_size: 0,
             attributes: Vec::new(),
+            obj_header_written_addr: None,
+            obj_header_encoded_size: 0,
             chunked: Some(ChunkedDatasetInfo {
                 chunk_dims: chunk_dims.to_vec(),
                 max_dims: max_dims.to_vec(),
@@ -482,11 +496,136 @@ impl Hdf5Writer {
         Ok(())
     }
 
+    /// Provide mutable access to the underlying file handle.
+    pub fn handle(&mut self) -> &mut FileHandle {
+        &mut self.handle
+    }
+
+    /// Return the current end-of-file offset.
+    pub fn eof(&self) -> u64 {
+        self.allocator.eof()
+    }
+
+    /// Write the superblock at offset 0 with the given flags.
+    ///
+    /// Requires that the root group has already been written (via `finalize`
+    /// or `finalize_for_swmr`).
+    pub fn write_superblock(&mut self, flags: u8) -> IoResult<()> {
+        let root_addr = self.root_group_addr.ok_or_else(|| {
+            crate::IoError::InvalidState("root group not yet written".into())
+        })?;
+        let sb = SuperblockV2V3 {
+            version: SUPERBLOCK_V3,
+            sizeof_offsets: self.ctx.sizeof_addr,
+            sizeof_lengths: self.ctx.sizeof_size,
+            file_consistency_flags: flags,
+            base_address: 0,
+            superblock_extension_address: UNDEF_ADDR,
+            end_of_file_address: self.allocator.eof(),
+            root_group_object_header_address: root_addr,
+        };
+        let sb_encoded = sb.encode();
+        self.handle.write_at(0, &sb_encoded)?;
+        Ok(())
+    }
+
+    /// Re-write a dataset's object header in place (SWMR update).
+    ///
+    /// The header must have been previously written via `finalize_for_swmr`.
+    /// Only the dataspace dimensions change; the encoded size must not exceed
+    /// the originally allocated space.
+    pub fn write_dataset_header_inplace(&mut self, index: usize) -> IoResult<()> {
+        let addr = self.datasets[index].obj_header_written_addr.ok_or_else(|| {
+            crate::IoError::InvalidState("dataset header not yet written".into())
+        })?;
+        let original_size = self.datasets[index].obj_header_encoded_size;
+
+        let header = self.build_dataset_header(index);
+        let encoded = header.encode();
+
+        if encoded.len() > original_size {
+            return Err(crate::IoError::InvalidState(format!(
+                "dataset header grew from {} to {} bytes; cannot rewrite in place",
+                original_size, encoded.len()
+            )));
+        }
+
+        // Pad to original size with zeros (the trailing zeros after the
+        // checksum won't be parsed by readers since chunk0_data_size is fixed).
+        let mut padded = encoded;
+        padded.resize(original_size, 0);
+
+        self.handle.write_at(addr, &padded)?;
+        Ok(())
+    }
+
+    /// Perform a full finalize for SWMR mode.
+    ///
+    /// This writes all dataset object headers, the root group header, and the
+    /// superblock with SWMR flags. After this call, the file is valid for
+    /// SWMR readers. Subsequent writes use in-place updates.
+    pub fn finalize_for_swmr(&mut self) -> IoResult<()> {
+        // 0. Flush all chunked dataset index structures.
+        for i in 0..self.datasets.len() {
+            if self.datasets[i].chunked.is_some() {
+                self.flush_dataset(i)?;
+            }
+        }
+
+        // 1. Write each dataset's object header.
+        for i in 0..self.datasets.len() {
+            let ds_header = self.build_dataset_header(i);
+            let encoded = ds_header.encode();
+            let encoded_size = encoded.len();
+            let addr = self.allocator.allocate(encoded_size as u64);
+            self.handle.write_at(addr, &encoded)?;
+            self.datasets[i].obj_header_addr = addr;
+            self.datasets[i].obj_header_written_addr = Some(addr);
+            self.datasets[i].obj_header_encoded_size = encoded_size;
+        }
+
+        // 2. Write root group object header.
+        let root_header = self.build_root_group_header();
+        let root_encoded = root_header.encode();
+        let root_encoded_size = root_encoded.len();
+        let root_addr = self.allocator.allocate(root_encoded_size as u64);
+        self.handle.write_at(root_addr, &root_encoded)?;
+        self.root_group_addr = Some(root_addr);
+        self.root_group_encoded_size = root_encoded_size;
+
+        // 3. Write superblock with SWMR flags.
+        self.write_superblock(FLAG_WRITE_ACCESS | FLAG_SWMR_WRITE)?;
+
+        self.handle.sync_all()?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
 
     fn finalize(&mut self) -> IoResult<()> {
+        // If SWMR finalize was already done, re-write headers in place and
+        // update the superblock with clean-close flags.
+        if self.root_group_addr.is_some() {
+            // Flush EA index structures.
+            for i in 0..self.datasets.len() {
+                if self.datasets[i].chunked.is_some() {
+                    self.flush_dataset(i)?;
+                }
+            }
+            // Re-write dataset headers in place with final dims.
+            for i in 0..self.datasets.len() {
+                if self.datasets[i].obj_header_written_addr.is_some() {
+                    self.write_dataset_header_inplace(i)?;
+                }
+            }
+            // Write superblock with clean-close flags (no SWMR).
+            self.write_superblock(0)?;
+            self.handle.sync_all()?;
+            return Ok(());
+        }
+
         // 0. Flush all chunked dataset index structures.
         for i in 0..self.datasets.len() {
             if self.datasets[i].chunked.is_some() {
@@ -508,20 +647,10 @@ impl Hdf5Writer {
         let root_encoded = root_header.encode();
         let root_addr = self.allocator.allocate(root_encoded.len() as u64);
         self.handle.write_at(root_addr, &root_encoded)?;
+        self.root_group_addr = Some(root_addr);
 
         // 3. Write superblock at offset 0.
-        let sb = SuperblockV2V3 {
-            version: SUPERBLOCK_V3,
-            sizeof_offsets: self.ctx.sizeof_addr,
-            sizeof_lengths: self.ctx.sizeof_size,
-            file_consistency_flags: 0, // clean close
-            base_address: 0,
-            superblock_extension_address: UNDEF_ADDR,
-            end_of_file_address: self.allocator.eof(),
-            root_group_object_header_address: root_addr,
-        };
-        let sb_encoded = sb.encode();
-        self.handle.write_at(0, &sb_encoded)?;
+        self.write_superblock(0)?;
 
         self.handle.sync_all()?;
         Ok(())

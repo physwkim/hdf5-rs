@@ -33,14 +33,20 @@ pub struct DatasetReadInfo {
 /// HDF5 file reader.
 pub struct Hdf5Reader {
     handle: FileHandle,
-    #[allow(dead_code)]
     ctx: FormatContext,
-    #[allow(dead_code)]
     superblock: SuperblockV2V3,
     datasets: Vec<DatasetReadInfo>,
 }
 
 impl Hdf5Reader {
+    /// Open an existing HDF5 file in SWMR read mode.
+    ///
+    /// Currently identical to `open()`, but indicates intent to use
+    /// `refresh()` for re-reading metadata written by a concurrent SWMR writer.
+    pub fn open_swmr(path: &Path) -> IoResult<Self> {
+        Self::open(path)
+    }
+
     /// Open an existing HDF5 file for reading.
     ///
     /// Parses the superblock, root group, and discovers all datasets
@@ -161,6 +167,76 @@ impl Hdf5Reader {
                 self.read_chunked_v4(name, real_chunk_dims, *index_address, *index_type, earray_params.as_ref())
             }
         }
+    }
+
+    /// Re-read the superblock and dataset metadata for SWMR.
+    ///
+    /// Call this periodically to pick up new data written by a concurrent
+    /// SWMR writer. The superblock is re-read to get the latest EOF, then
+    /// the root group is re-scanned for updated dataset headers (which may
+    /// contain updated dataspace dimensions and chunk index addresses).
+    pub fn refresh(&mut self) -> IoResult<()> {
+        // Re-read superblock to get latest EOF and root group address.
+        let sb_buf = self.handle.read_at_most(0, 256)?;
+        let sb = SuperblockV2V3::decode(&sb_buf)?;
+
+        let ctx = FormatContext {
+            sizeof_addr: sb.sizeof_offsets,
+            sizeof_size: sb.sizeof_lengths,
+        };
+
+        // Re-read root group object header.
+        let root_buf = self.handle.read_at_most(sb.root_group_object_header_address, 4096)?;
+        let (root_header, _) = ObjectHeader::decode(&root_buf)?;
+
+        // Re-scan datasets from link messages.
+        let mut datasets = Vec::new();
+        for msg in &root_header.messages {
+            if msg.msg_type == MSG_LINK {
+                let (link, _) = LinkMessage::decode(&msg.data, &ctx)?;
+                if let LinkTarget::Hard { address } = &link.target {
+                    let ds_buf = self.handle.read_at_most(*address, 4096)?;
+                    let (ds_header, _) = ObjectHeader::decode(&ds_buf)?;
+
+                    let mut datatype = None;
+                    let mut dataspace = None;
+                    let mut layout = None;
+
+                    for ds_msg in &ds_header.messages {
+                        match ds_msg.msg_type {
+                            MSG_DATATYPE => {
+                                let (dt, _) = DatatypeMessage::decode(&ds_msg.data, &ctx)?;
+                                datatype = Some(dt);
+                            }
+                            MSG_DATASPACE => {
+                                let (ds, _) = DataspaceMessage::decode(&ds_msg.data, &ctx)?;
+                                dataspace = Some(ds);
+                            }
+                            MSG_DATA_LAYOUT => {
+                                let (dl, _) = DataLayoutMessage::decode(&ds_msg.data, &ctx)?;
+                                layout = Some(dl);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if let (Some(dt), Some(ds), Some(dl)) = (datatype, dataspace, layout) {
+                        datasets.push(DatasetReadInfo {
+                            name: link.name.clone(),
+                            datatype: dt,
+                            dataspace: ds,
+                            layout: dl,
+                        });
+                    }
+                }
+            }
+        }
+
+        self.superblock = sb;
+        self.ctx = ctx;
+        self.datasets = datasets;
+
+        Ok(())
     }
 
     /// Read chunked dataset data by walking the extensible array index.

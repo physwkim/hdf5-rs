@@ -302,7 +302,9 @@ impl H5Dataset {
                     )));
                 }
 
-                // Reinterpret the typed slice as raw bytes.
+                // Safety: T: Copy + 'static (numeric primitive) with well-defined
+                // byte representation. The resulting slice borrows `data` and
+                // lives only as long as this block.
                 let byte_len = data.len() * T::element_size();
                 let raw = unsafe {
                     std::slice::from_raw_parts(data.as_ptr() as *const u8, byte_len)
@@ -447,17 +449,21 @@ impl H5Dataset {
                 }
 
                 let count = raw.len() / T::element_size();
-                let mut result = Vec::with_capacity(count);
+                let mut result = Vec::<T>::with_capacity(count);
 
-                // Safety: T is Copy + Sized, and we verified alignment above.
-                // We copy byte-by-byte into a properly aligned Vec<T>.
+                // Safety: T is Copy + 'static (required by H5Type). We verified
+                // the byte count matches count * size_of::<T>() above.
+                // copy_nonoverlapping fills the memory with valid bit patterns
+                // for all H5Type implementors (numeric primitives).
+                // We call set_len AFTER the copy so that if an unexpected panic
+                // occurs, uninitialized memory is never exposed.
                 unsafe {
-                    result.set_len(count);
                     std::ptr::copy_nonoverlapping(
                         raw.as_ptr(),
                         result.as_mut_ptr() as *mut u8,
                         raw.len(),
                     );
+                    result.set_len(count);
                 }
 
                 Ok(result)

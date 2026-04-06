@@ -6,3 +6,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+
+[dependencies]
+flate2 = { version = "1", optional = true }
+
+[features]
+default = ["deflate"]
+deflate = ["flate2"]
