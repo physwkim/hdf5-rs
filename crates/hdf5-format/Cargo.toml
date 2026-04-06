@@ -1,0 +1,8 @@
+[package]
+name = "hdf5-format"
+description = "Pure Rust HDF5 on-disk format codec (encode/decode, no I/O)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "hdf5-io"
+description = "I/O engine for pure Rust HDF5: file allocation, buffered I/O, SWMR protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+hdf5-format = { path = "../hdf5-format" }
