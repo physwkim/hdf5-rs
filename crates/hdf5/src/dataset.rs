@@ -4,12 +4,9 @@
 //! [`H5File::new_dataset`](crate::file::H5File::new_dataset). Once created,
 //! the [`H5Dataset`] handle can read or write raw typed data.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use crate::attribute::AttrBuilder;
 use crate::error::{Hdf5Error, Result};
-use crate::file::H5FileInner;
+use crate::file::{H5FileInner, SharedInner, borrow_inner_mut, clone_inner};
 use crate::types::H5Type;
 
 // ---------------------------------------------------------------------------
@@ -29,7 +26,7 @@ use crate::types::H5Type;
 ///     .unwrap();
 /// ```
 pub struct DatasetBuilder<T: H5Type> {
-    file_inner: Rc<RefCell<H5FileInner>>,
+    file_inner: SharedInner,
     shape: Option<Vec<usize>>,
     chunk_dims: Option<Vec<usize>>,
     max_shape: Option<Vec<Option<usize>>>,
@@ -37,7 +34,7 @@ pub struct DatasetBuilder<T: H5Type> {
 }
 
 impl<T: H5Type> DatasetBuilder<T> {
-    pub(crate) fn new(file_inner: Rc<RefCell<H5FileInner>>) -> Self {
+    pub(crate) fn new(file_inner: SharedInner) -> Self {
         Self {
             file_inner,
             shape: None,
@@ -50,6 +47,7 @@ impl<T: H5Type> DatasetBuilder<T> {
     /// Set the dataset dimensions.
     ///
     /// This is required before calling [`create`](Self::create).
+    #[must_use]
     pub fn shape<S: AsRef<[usize]>>(mut self, dims: S) -> Self {
         self.shape = Some(dims.as_ref().to_vec());
         self
@@ -60,6 +58,7 @@ impl<T: H5Type> DatasetBuilder<T> {
     /// When set, the dataset uses chunked storage with the extensible array
     /// index. You should also call [`max_shape`](Self::max_shape) or
     /// [`resizable`](Self::resizable) to allow extending.
+    #[must_use]
     pub fn chunk(mut self, chunk_dims: &[usize]) -> Self {
         self.chunk_dims = Some(chunk_dims.to_vec());
         self
@@ -68,12 +67,14 @@ impl<T: H5Type> DatasetBuilder<T> {
     /// Make all dimensions unlimited (resizable).
     ///
     /// This sets max_dims to u64::MAX for all dimensions.
+    #[must_use]
     pub fn resizable(mut self) -> Self {
         self.max_shape = Some(vec![None; self.shape.as_ref().map_or(0, |s| s.len())]);
         self
     }
 
     /// Set maximum dimensions. `None` means unlimited for that dimension.
+    #[must_use]
     pub fn max_shape(mut self, max: &[Option<usize>]) -> Self {
         self.max_shape = Some(max.to_vec());
         self
@@ -105,7 +106,7 @@ impl<T: H5Type> DatasetBuilder<T> {
             };
 
             let index = {
-                let mut inner = self.file_inner.borrow_mut();
+                let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         writer.create_chunked_dataset(
@@ -124,7 +125,7 @@ impl<T: H5Type> DatasetBuilder<T> {
             };
 
             Ok(H5Dataset {
-                file_inner: Rc::clone(&self.file_inner),
+                file_inner: clone_inner(&self.file_inner),
                 info: DatasetInfo::Writer {
                     index,
                     shape,
@@ -135,7 +136,7 @@ impl<T: H5Type> DatasetBuilder<T> {
         } else {
             // Contiguous dataset (original path)
             let index = {
-                let mut inner = self.file_inner.borrow_mut();
+                let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         writer.create_dataset(name, datatype, &dims_u64)?
@@ -152,7 +153,7 @@ impl<T: H5Type> DatasetBuilder<T> {
             };
 
             Ok(H5Dataset {
-                file_inner: Rc::clone(&self.file_inner),
+                file_inner: clone_inner(&self.file_inner),
                 info: DatasetInfo::Writer {
                     index,
                     shape,
@@ -202,14 +203,14 @@ enum DatasetInfo {
 /// remains valid even if the originating [`H5File`](crate::file::H5File) is
 /// moved or dropped (they share ownership via `Rc`).
 pub struct H5Dataset {
-    file_inner: Rc<RefCell<H5FileInner>>,
+    file_inner: SharedInner,
     info: DatasetInfo,
 }
 
 impl H5Dataset {
     /// Create a reader-mode dataset handle (called internally by `H5File::dataset`).
     pub(crate) fn new_reader(
-        file_inner: Rc<RefCell<H5FileInner>>,
+        file_inner: SharedInner,
         name: String,
         shape: Vec<usize>,
         element_size: usize,
@@ -229,6 +230,30 @@ impl H5Dataset {
         match &self.info {
             DatasetInfo::Writer { shape, .. } => shape.clone(),
             DatasetInfo::Reader { shape, .. } => shape.clone(),
+        }
+    }
+
+    /// Return the number of dimensions (rank) of the dataset.
+    pub fn ndims(&self) -> usize {
+        match &self.info {
+            DatasetInfo::Writer { shape, .. } => shape.len(),
+            DatasetInfo::Reader { shape, .. } => shape.len(),
+        }
+    }
+
+    /// Return the total number of elements in the dataset.
+    pub fn total_elements(&self) -> usize {
+        match &self.info {
+            DatasetInfo::Writer { shape, .. } => shape.iter().product(),
+            DatasetInfo::Reader { shape, .. } => shape.iter().product(),
+        }
+    }
+
+    /// Return the size of one element in bytes.
+    pub fn element_size(&self) -> usize {
+        match &self.info {
+            DatasetInfo::Writer { element_size, .. } => *element_size,
+            DatasetInfo::Reader { element_size, .. } => *element_size,
         }
     }
 
@@ -310,7 +335,7 @@ impl H5Dataset {
                     std::slice::from_raw_parts(data.as_ptr() as *const u8, byte_len)
                 };
 
-                let mut inner = self.file_inner.borrow_mut();
+                let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         writer.write_dataset_raw(*index, raw)?;
@@ -340,7 +365,7 @@ impl H5Dataset {
                     ));
                 }
 
-                let mut inner = self.file_inner.borrow_mut();
+                let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         writer.write_chunk(*index, chunk_idx as u64, data)?;
@@ -368,7 +393,7 @@ impl H5Dataset {
                 }
 
                 let dims_u64: Vec<u64> = new_dims.iter().map(|&d| d as u64).collect();
-                let mut inner = self.file_inner.borrow_mut();
+                let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         writer.extend_dataset(*index, &dims_u64)?;
@@ -389,7 +414,7 @@ impl H5Dataset {
     pub fn flush(&self) -> Result<()> {
         match &self.info {
             DatasetInfo::Writer { index, .. } => {
-                let mut inner = self.file_inner.borrow_mut();
+                let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         writer.flush_dataset(*index)?;
@@ -429,7 +454,7 @@ impl H5Dataset {
                 }
 
                 let raw = {
-                    let mut inner = self.file_inner.borrow_mut();
+                    let mut inner = borrow_inner_mut(&self.file_inner);
                     match &mut *inner {
                         H5FileInner::Reader(reader) => reader.read_dataset_raw(name)?,
                         _ => {
@@ -746,7 +771,7 @@ mod tests {
             ds.write_raw(&[1.5f32, 2.5]).unwrap();
 
             let ds = file.new_dataset::<f64>().shape([2]).create("f64").unwrap();
-            ds.write_raw(&[3.14f64, 2.718]).unwrap();
+            ds.write_raw(&[1.23456f64, 7.89012]).unwrap();
 
             file.close().unwrap();
         }
@@ -763,7 +788,7 @@ mod tests {
             assert_eq!(file.dataset("u64").unwrap().read_raw::<u64>().unwrap(), vec![10000u64, 20000]);
             assert_eq!(file.dataset("i64").unwrap().read_raw::<i64>().unwrap(), vec![-10000i64, 10000]);
             assert_eq!(file.dataset("f32").unwrap().read_raw::<f32>().unwrap(), vec![1.5f32, 2.5]);
-            assert_eq!(file.dataset("f64").unwrap().read_raw::<f64>().unwrap(), vec![3.14f64, 2.718]);
+            assert_eq!(file.dataset("f64").unwrap().read_raw::<f64>().unwrap(), vec![1.23456f64, 7.89012]);
         }
 
         std::fs::remove_file(&path).ok();

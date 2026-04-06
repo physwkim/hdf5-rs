@@ -20,11 +20,8 @@
 //!     .unwrap();
 //! ```
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use crate::dataset::DatasetBuilder;
-use crate::file::H5FileInner;
+use crate::file::{SharedInner, clone_inner};
 use crate::types::H5Type;
 
 /// A handle to an HDF5 group.
@@ -32,14 +29,14 @@ use crate::types::H5Type;
 /// Groups are containers for datasets and other groups. The root group
 /// is always available via [`H5File::root_group`](crate::file::H5File::root_group).
 pub struct H5Group {
-    file_inner: Rc<RefCell<H5FileInner>>,
+    file_inner: SharedInner,
     /// The absolute path of this group (e.g., "/" or "/detector").
     name: String,
 }
 
 impl H5Group {
     /// Create a new group handle.
-    pub(crate) fn new(file_inner: Rc<RefCell<H5FileInner>>, name: String) -> Self {
+    pub(crate) fn new(file_inner: SharedInner, name: String) -> Self {
         Self { file_inner, name }
     }
 
@@ -54,7 +51,7 @@ impl H5Group {
     /// stored in the file. For now, all datasets are stored as links
     /// in the root group with "/" separated names.
     pub fn new_dataset<T: H5Type>(&self) -> DatasetBuilder<T> {
-        DatasetBuilder::new(Rc::clone(&self.file_inner))
+        DatasetBuilder::new(clone_inner(&self.file_inner))
     }
 
     /// Create a sub-group within this group.
@@ -72,7 +69,7 @@ impl H5Group {
             format!("{}/{}", self.name, name)
         };
         H5Group {
-            file_inner: Rc::clone(&self.file_inner),
+            file_inner: clone_inner(&self.file_inner),
             name: full_name,
         }
     }

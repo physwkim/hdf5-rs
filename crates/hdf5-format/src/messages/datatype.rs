@@ -432,15 +432,14 @@ impl DatatypeMessage {
                 let version: u8 = 3;
                 let num_members = members.len() as u16;
 
-                let mut buf = Vec::new();
-
-                // byte 0: class | version<<4
-                buf.push(CLASS_COMPOUND | (version << 4));
-
-                // bytes 1-3: num_members as 16-bit LE in bytes 1-2, byte 3 = 0
-                buf.push(num_members as u8);
-                buf.push((num_members >> 8) as u8);
-                buf.push(0);
+                let mut buf = vec![
+                    // byte 0: class | version<<4
+                    CLASS_COMPOUND | (version << 4),
+                    // bytes 1-3: num_members as 16-bit LE in bytes 1-2, byte 3 = 0
+                    num_members as u8,
+                    (num_members >> 8) as u8,
+                    0,
+                ];
 
                 // bytes 4-7: element size
                 buf.extend_from_slice(&size.to_le_bytes());
@@ -465,15 +464,14 @@ impl DatatypeMessage {
                 let num_members = members.len() as u16;
                 let base_size = base.element_size();
 
-                let mut buf = Vec::new();
-
-                // byte 0: class | version<<4
-                buf.push(CLASS_ENUM | (DT_VERSION << 4));
-
-                // bytes 1-3: num_members as 16-bit LE
-                buf.push(num_members as u8);
-                buf.push((num_members >> 8) as u8);
-                buf.push(0);
+                let mut buf = vec![
+                    // byte 0: class | version<<4
+                    CLASS_ENUM | (DT_VERSION << 4),
+                    // bytes 1-3: num_members as 16-bit LE
+                    num_members as u8,
+                    (num_members >> 8) as u8,
+                    0,
+                ];
 
                 // bytes 4-7: element size (= base type size)
                 buf.extend_from_slice(&base_size.to_le_bytes());
@@ -510,18 +508,17 @@ impl DatatypeMessage {
                 // Properties: the base type (1-byte char, class 3 string).
                 let vlen_size = Self::vlen_ref_size(ctx);
 
-                let mut buf = Vec::new();
-
-                // byte 0: class 9 | version<<4
-                buf.push(CLASS_VLEN | (DT_VERSION << 4));
-
-                // bytes 1-3: flags
-                // byte 1 bits 0-3: type = 1 (string)
-                //         bits 4-7: padding type (0 = null pad)
-                // byte 2 bits 0-3: charset (0=ASCII, 1=UTF-8)
-                buf.push(0x01); // type = string (1)
-                buf.push(*charset & 0x0F); // charset
-                buf.push(0);
+                let mut buf = vec![
+                    // byte 0: class 9 | version<<4
+                    CLASS_VLEN | (DT_VERSION << 4),
+                    // bytes 1-3: flags
+                    // byte 1 bits 0-3: type = 1 (string)
+                    //         bits 4-7: padding type (0 = null pad)
+                    0x01, // type = string (1)
+                    // byte 2 bits 0-3: charset (0=ASCII, 1=UTF-8)
+                    *charset & 0x0F, // charset
+                    0,
+                ];
 
                 // bytes 4-7: element size
                 buf.extend_from_slice(&vlen_size.to_le_bytes());
@@ -545,15 +542,14 @@ impl DatatypeMessage {
                 let product: u32 = dims.iter().product();
                 let total_size = product * base_size;
 
-                let mut buf = Vec::new();
-
-                // byte 0: class | version<<4
-                buf.push(CLASS_ARRAY | (version << 4));
-
-                // bytes 1-3: flags = 0
-                buf.push(0);
-                buf.push(0);
-                buf.push(0);
+                let mut buf = vec![
+                    // byte 0: class | version<<4
+                    CLASS_ARRAY | (version << 4),
+                    // bytes 1-3: flags = 0
+                    0,
+                    0,
+                    0,
+                ];
 
                 // bytes 4-7: element size (total array size)
                 buf.extend_from_slice(&total_size.to_le_bytes());
@@ -916,6 +912,38 @@ impl DatatypeMessage {
                 "datatype class {}",
                 class
             ))),
+        }
+    }
+}
+
+// ========================================================================= Display
+
+impl std::fmt::Display for DatatypeMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FixedPoint { size, signed, .. } => {
+                let prefix = if *signed { "i" } else { "u" };
+                write!(f, "{}{}", prefix, size * 8)
+            }
+            Self::FloatingPoint { size, .. } => write!(f, "f{}", size * 8),
+            Self::FixedString { size, charset, .. } => {
+                let cs = if *charset == 1 { "UTF-8" } else { "ASCII" };
+                write!(f, "string[{}; {}]", size, cs)
+            }
+            Self::Compound { size, members } => {
+                write!(f, "compound({} bytes, {} members)", size, members.len())
+            }
+            Self::Enum { base, members } => {
+                write!(f, "enum<{}; {} members>", base, members.len())
+            }
+            Self::VarLenString { charset } => {
+                let cs = if *charset == 1 { "UTF-8" } else { "ASCII" };
+                write!(f, "vlen_string({})", cs)
+            }
+            Self::Array { dims, base } => {
+                let dim_str: Vec<String> = dims.iter().map(|d| d.to_string()).collect();
+                write!(f, "array[{}; {}]", dim_str.join("x"), base)
+            }
         }
     }
 }

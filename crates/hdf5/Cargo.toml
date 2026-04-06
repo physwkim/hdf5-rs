@@ -10,3 +10,7 @@ repository.workspace = true
 [dependencies]
 hdf5-format = { path = "../hdf5-format" }
 hdf5-io = { path = "../hdf5-io" }
+
+[features]
+default = []
+threadsafe = []

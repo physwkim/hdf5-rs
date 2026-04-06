@@ -177,6 +177,11 @@ impl Hdf5Writer {
         &self.ctx
     }
 
+    /// Return the names of all datasets created so far.
+    pub fn dataset_names(&self) -> Vec<&str> {
+        self.datasets.iter().map(|d| d.name.as_str()).collect()
+    }
+
     /// Define a new contiguous dataset. Returns the dataset index (used with
     /// `write_dataset_raw`).
     ///
@@ -1365,8 +1370,8 @@ mod tests {
             .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 12);
-        for i in 0..12 {
-            assert_eq!(values[i], i as f64);
+        for (i, val) in values.iter().enumerate() {
+            assert_eq!(*val, i as f64);
         }
 
         std::fs::remove_file(&path).ok();
@@ -1407,8 +1412,8 @@ mod tests {
             .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 20);
-        for i in 0..20 {
-            assert_eq!(values[i], i as i32);
+        for (i, val) in values.iter().enumerate() {
+            assert_eq!(*val, i as i32);
         }
 
         std::fs::remove_file(&path).ok();
@@ -1459,8 +1464,8 @@ mod tests {
             .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 24);
-        for i in 0..24 {
-            assert_eq!(values[i], i as i32);
+        for (i, val) in values.iter().enumerate() {
+            assert_eq!(*val, i as i32);
         }
 
         std::fs::remove_file(&path).ok();
@@ -1517,8 +1522,8 @@ mod tests {
             .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 24);
-        for i in 0..24 {
-            assert_eq!(values[i], i as f64);
+        for (i, val) in values.iter().enumerate() {
+            assert_eq!(*val, i as f64);
         }
 
         std::fs::remove_file(&path).ok();
@@ -1568,8 +1573,8 @@ mod tests {
             .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 32);
-        for i in 0..32 {
-            assert_eq!(values[i], i as i32);
+        for (i, val) in values.iter().enumerate() {
+            assert_eq!(*val, i as i32);
         }
 
         std::fs::remove_file(&path).ok();
@@ -1611,12 +1616,12 @@ mod tests {
             .collect();
         assert_eq!(values.len(), 80); // 5 * 4 * 4
         // Verify first frame
-        for i in 0..16 {
-            assert_eq!(values[i], i as u16);
+        for (i, val) in values.iter().enumerate().take(16) {
+            assert_eq!(*val, i as u16);
         }
         // Verify last frame
-        for i in 0..16 {
-            assert_eq!(values[64 + i], 4 * 16 + i as u16);
+        for (i, val) in values[64..80].iter().enumerate() {
+            assert_eq!(*val, 4 * 16 + i as u16);
         }
 
         std::fs::remove_file(&path).ok();

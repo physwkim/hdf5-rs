@@ -532,9 +532,7 @@ impl Hdf5Reader {
                 for &dblk_addr in &iblk.dblk_addrs {
                     if dblk_addr == UNDEF_ADDR {
                         // Add UNDEF entries for the unallocated block
-                        for _ in 0..dblk_nelmts {
-                            chunk_addrs.push(UNDEF_ADDR);
-                        }
+                        chunk_addrs.extend(std::iter::repeat_n(UNDEF_ADDR, dblk_nelmts));
                     } else {
                         let dblk_buf = self.handle.read_at_most(dblk_addr, 4096)?;
                         let dblk = ExtensibleArrayDataBlock::decode(

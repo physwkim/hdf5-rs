@@ -10,6 +10,8 @@ pub enum Hdf5Error {
     /// An I/O-layer error from hdf5-io.
     IoLayer(hdf5_io::IoError),
     /// A requested object (dataset, group, attribute) was not found.
+    ///
+    /// The string contains the name of the missing object (e.g., dataset name).
     NotFound(String),
     /// The file or object is in an invalid state for the requested operation.
     InvalidState(String),
@@ -41,7 +43,7 @@ impl std::fmt::Display for Hdf5Error {
             Self::Io(e) => write!(f, "I/O error: {}", e),
             Self::Format(e) => write!(f, "format error: {}", e),
             Self::IoLayer(e) => write!(f, "hdf5-io error: {}", e),
-            Self::NotFound(s) => write!(f, "not found: {}", s),
+            Self::NotFound(s) => write!(f, "dataset '{}' not found", s),
             Self::InvalidState(s) => write!(f, "invalid state: {}", s),
             Self::TypeMismatch(s) => write!(f, "type mismatch: {}", s),
         }

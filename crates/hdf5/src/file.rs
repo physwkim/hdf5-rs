@@ -16,9 +16,7 @@
 //! assert_eq!(data.len(), 200);
 //! ```
 
-use std::cell::RefCell;
 use std::path::Path;
-use std::rc::Rc;
 
 use hdf5_io::{Hdf5Reader, Hdf5Writer};
 
@@ -27,7 +25,66 @@ use crate::error::{Hdf5Error, Result};
 use crate::group::H5Group;
 use crate::types::H5Type;
 
-/// The inner state of an HDF5 file, shared with datasets via `Rc<RefCell<>>`.
+// ---------------------------------------------------------------------------
+// Thread-safety: choose between Rc<RefCell<>> and Arc<Mutex<>> based on
+// the `threadsafe` feature flag.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(feature = "threadsafe"))]
+pub(crate) type SharedInner = std::rc::Rc<std::cell::RefCell<H5FileInner>>;
+
+#[cfg(feature = "threadsafe")]
+pub(crate) type SharedInner = std::sync::Arc<std::sync::Mutex<H5FileInner>>;
+
+/// Helper to borrow/lock the inner state immutably.
+#[cfg(not(feature = "threadsafe"))]
+pub(crate) fn borrow_inner(inner: &SharedInner) -> std::cell::Ref<'_, H5FileInner> {
+    inner.borrow()
+}
+
+/// Helper to borrow/lock the inner state mutably.
+#[cfg(not(feature = "threadsafe"))]
+pub(crate) fn borrow_inner_mut(inner: &SharedInner) -> std::cell::RefMut<'_, H5FileInner> {
+    inner.borrow_mut()
+}
+
+/// Helper to clone a SharedInner.
+#[cfg(not(feature = "threadsafe"))]
+pub(crate) fn clone_inner(inner: &SharedInner) -> SharedInner {
+    std::rc::Rc::clone(inner)
+}
+
+/// Helper to wrap an H5FileInner in SharedInner.
+#[cfg(not(feature = "threadsafe"))]
+pub(crate) fn new_shared(inner: H5FileInner) -> SharedInner {
+    std::rc::Rc::new(std::cell::RefCell::new(inner))
+}
+
+#[cfg(feature = "threadsafe")]
+pub(crate) fn borrow_inner(inner: &SharedInner) -> std::sync::MutexGuard<'_, H5FileInner> {
+    inner.lock().unwrap()
+}
+
+#[cfg(feature = "threadsafe")]
+pub(crate) fn borrow_inner_mut(inner: &SharedInner) -> std::sync::MutexGuard<'_, H5FileInner> {
+    inner.lock().unwrap()
+}
+
+#[cfg(feature = "threadsafe")]
+pub(crate) fn clone_inner(inner: &SharedInner) -> SharedInner {
+    std::sync::Arc::clone(inner)
+}
+
+#[cfg(feature = "threadsafe")]
+pub(crate) fn new_shared(inner: H5FileInner) -> SharedInner {
+    std::sync::Arc::new(std::sync::Mutex::new(inner))
+}
+
+/// The inner state of an HDF5 file, shared with datasets via reference counting.
+///
+/// By default, this uses `Rc<RefCell<>>` for zero-overhead single-threaded use.
+/// Enable the `threadsafe` feature to use `Arc<Mutex<>>` instead, making
+/// `H5File` `Send + Sync`.
 pub(crate) enum H5FileInner {
     Writer(Hdf5Writer),
     Reader(Hdf5Reader),
@@ -41,7 +98,7 @@ pub(crate) enum H5FileInner {
 /// I/O handle, so the file does not need to outlive its datasets (they share
 /// ownership via reference counting).
 pub struct H5File {
-    pub(crate) inner: Rc<RefCell<H5FileInner>>,
+    pub(crate) inner: SharedInner,
 }
 
 impl H5File {
@@ -49,7 +106,7 @@ impl H5File {
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
         let writer = Hdf5Writer::create(path.as_ref())?;
         Ok(Self {
-            inner: Rc::new(RefCell::new(H5FileInner::Writer(writer))),
+            inner: new_shared(H5FileInner::Writer(writer)),
         })
     }
 
@@ -57,7 +114,7 @@ impl H5File {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let reader = Hdf5Reader::open(path.as_ref())?;
         Ok(Self {
-            inner: Rc::new(RefCell::new(H5FileInner::Reader(reader))),
+            inner: new_shared(H5FileInner::Reader(reader)),
         })
     }
 
@@ -65,7 +122,7 @@ impl H5File {
     ///
     /// The root group can be used to create datasets and sub-groups.
     pub fn root_group(&self) -> H5Group {
-        H5Group::new(Rc::clone(&self.inner), "/".to_string())
+        H5Group::new(clone_inner(&self.inner), "/".to_string())
     }
 
     /// Start building a new dataset with the given element type.
@@ -79,12 +136,12 @@ impl H5File {
     /// let ds = file.new_dataset::<f64>().shape(&[3, 4]).create("matrix").unwrap();
     /// ```
     pub fn new_dataset<T: H5Type>(&self) -> DatasetBuilder<T> {
-        DatasetBuilder::new(Rc::clone(&self.inner))
+        DatasetBuilder::new(clone_inner(&self.inner))
     }
 
     /// Open an existing dataset by name (read mode).
     pub fn dataset(&self, name: &str) -> Result<H5Dataset> {
-        let inner = self.inner.borrow();
+        let inner = borrow_inner(&self.inner);
         match &*inner {
             H5FileInner::Reader(reader) => {
                 let info = reader
@@ -93,7 +150,7 @@ impl H5File {
                 let shape: Vec<usize> = info.dataspace.dims.iter().map(|&d| d as usize).collect();
                 let element_size = info.datatype.element_size() as usize;
                 Ok(H5Dataset::new_reader(
-                    Rc::clone(&self.inner),
+                    clone_inner(&self.inner),
                     name.to_string(),
                     shape,
                     element_size,
@@ -109,6 +166,24 @@ impl H5File {
         }
     }
 
+    /// Return the names of all datasets in the root group.
+    ///
+    /// Works in both read and write mode: in write mode, returns the names of
+    /// datasets created so far; in read mode, returns the names discovered
+    /// during file open.
+    pub fn dataset_names(&self) -> Vec<String> {
+        let inner = borrow_inner(&self.inner);
+        match &*inner {
+            H5FileInner::Reader(reader) => {
+                reader.dataset_names().iter().map(|s| s.to_string()).collect()
+            }
+            H5FileInner::Writer(writer) => {
+                writer.dataset_names().iter().map(|s| s.to_string()).collect()
+            }
+            H5FileInner::Closed => Vec::new(),
+        }
+    }
+
     /// Explicitly close the file. For a writer, this finalizes the file
     /// (writes superblock, headers, etc.). For a reader, this is a no-op.
     ///
@@ -116,7 +191,7 @@ impl H5File {
     /// you handle errors.
     pub fn close(self) -> Result<()> {
         let old = {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = borrow_inner_mut(&self.inner);
             std::mem::replace(&mut *inner, H5FileInner::Closed)
         };
         match old {
@@ -446,8 +521,8 @@ mod integration_tests {
             assert_eq!(ds.shape(), vec![8, 3]);
             let data = ds.read_raw::<i32>().unwrap();
             assert_eq!(data.len(), 24);
-            for i in 0..24 {
-                assert_eq!(data[i], i as i32);
+            for (i, val) in data.iter().enumerate() {
+                assert_eq!(*val, i as i32);
             }
         }
 

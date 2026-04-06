@@ -16,14 +16,12 @@
 //! attr.write_scalar(&VarLenUnicode("meters".to_string())).unwrap();
 //! ```
 
-use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 use hdf5_format::messages::attribute::AttributeMessage;
 
 use crate::error::{Hdf5Error, Result};
-use crate::file::H5FileInner;
+use crate::file::{H5FileInner, SharedInner, borrow_inner_mut, clone_inner};
 use crate::types::VarLenUnicode;
 
 /// A handle to an HDF5 attribute.
@@ -32,7 +30,7 @@ use crate::types::VarLenUnicode;
 /// [`write_scalar`](Self::write_scalar) or [`write_string`](Self::write_string)
 /// to set its value.
 pub struct H5Attribute {
-    file_inner: Rc<RefCell<H5FileInner>>,
+    file_inner: SharedInner,
     ds_index: usize,
     name: String,
 }
@@ -45,7 +43,7 @@ impl H5Attribute {
     pub fn write_scalar(&self, value: &VarLenUnicode) -> Result<()> {
         let attr_msg = AttributeMessage::scalar_string(&self.name, &value.0);
 
-        let mut inner = self.file_inner.borrow_mut();
+        let mut inner = borrow_inner_mut(&self.file_inner);
         match &mut *inner {
             H5FileInner::Writer(writer) => {
                 writer.add_dataset_attribute(self.ds_index, attr_msg)?;
@@ -68,7 +66,7 @@ impl H5Attribute {
 ///
 /// Obtained from [`H5Dataset::new_attr::<T>()`](crate::dataset::H5Dataset::new_attr).
 pub struct AttrBuilder<'a, T> {
-    file_inner: &'a Rc<RefCell<H5FileInner>>,
+    file_inner: &'a SharedInner,
     ds_index: usize,
     _shape_set: bool,
     _marker: PhantomData<T>,
@@ -76,7 +74,7 @@ pub struct AttrBuilder<'a, T> {
 
 impl<'a, T> AttrBuilder<'a, T> {
     pub(crate) fn new(
-        file_inner: &'a Rc<RefCell<H5FileInner>>,
+        file_inner: &'a SharedInner,
         ds_index: usize,
     ) -> Self {
         Self {
@@ -88,6 +86,7 @@ impl<'a, T> AttrBuilder<'a, T> {
     }
 
     /// Set the attribute shape. Use `()` for a scalar attribute.
+    #[must_use]
     pub fn shape<S>(mut self, _shape: S) -> Self {
         // For now we only support scalar attributes.
         self._shape_set = true;
@@ -100,7 +99,7 @@ impl<'a, T> AttrBuilder<'a, T> {
     /// Call [`H5Attribute::write_scalar`] to set the value.
     pub fn create(self, name: &str) -> Result<H5Attribute> {
         Ok(H5Attribute {
-            file_inner: Rc::clone(self.file_inner),
+            file_inner: clone_inner(self.file_inner),
             ds_index: self.ds_index,
             name: name.to_string(),
         })

@@ -180,6 +180,23 @@ impl std::str::FromStr for VarLenUnicode {
     }
 }
 
+impl From<String> for VarLenUnicode {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for VarLenUnicode {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<VarLenUnicode> for String {
+    fn from(v: VarLenUnicode) -> Self {
+        v.0
+    }
+}
 
 impl std::fmt::Display for VarLenUnicode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

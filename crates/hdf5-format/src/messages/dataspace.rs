@@ -313,11 +313,12 @@ mod tests {
     #[test]
     fn decode_v1_simple_1d() {
         // Build a version 1 dataspace: 1D, dims=[100], no max
-        let mut buf = Vec::new();
-        buf.push(1); // version 1
-        buf.push(1); // ndims = 1
-        buf.push(0); // flags (no max dims)
-        buf.push(0); // reserved
+        let mut buf = vec![
+            1, // version 1
+            1, // ndims = 1
+            0, // flags (no max dims)
+            0, // reserved
+        ];
         buf.extend_from_slice(&[0u8; 4]); // reserved (4 bytes)
         buf.extend_from_slice(&100u64.to_le_bytes()); // dims[0] = 100
 
@@ -329,11 +330,12 @@ mod tests {
 
     #[test]
     fn decode_v1_with_max_dims() {
-        let mut buf = Vec::new();
-        buf.push(1); // version 1
-        buf.push(2); // ndims = 2
-        buf.push(1); // flags = has max dims
-        buf.push(0); // reserved
+        let mut buf = vec![
+            1, // version 1
+            2, // ndims = 2
+            1, // flags = has max dims
+            0, // reserved
+        ];
         buf.extend_from_slice(&[0u8; 4]); // reserved
         buf.extend_from_slice(&10u64.to_le_bytes()); // dims[0] = 10
         buf.extend_from_slice(&20u64.to_le_bytes()); // dims[1] = 20
