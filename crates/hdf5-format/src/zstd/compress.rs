@@ -136,11 +136,21 @@ fn write_compressed_block(out: &mut Vec<u8>, compressed: &[u8], is_last: bool) {
 // Block compression (greedy matching + raw literals + predefined FSE)
 // =========================================================================
 
-/// A sequence: (literal_length, offset, match_length).
+/// A sequence: (literal_length, offset_value, match_length).
+/// `off` is the raw back-reference distance.
+/// After repeat offset resolution, it becomes an "offset value" for encoding.
 struct Sequence {
-    ll: u32,   // literal length
-    off: u32,  // offset (1-based, as stored in zstd)
-    ml: u32,   // match length (raw, not -3)
+    ll: u32,
+    off: u32,  // raw back-reference distance
+    ml: u32,   // actual match length (>= ZSTD_MINMATCH)
+}
+
+/// Offset value after repeat-offset resolution.
+/// In zstd, offset_value 1/2/3 = repeat offsets, >3 = new offset + 3.
+struct EncodedSequence {
+    ll: u32,
+    of_value: u32, // offset value for encoding (1..3 = repcode, >3 = new)
+    ml: u32,
 }
 
 /// Match finder parameters, derived from compression level.
@@ -165,15 +175,15 @@ fn compress_block(data: &[u8], params: &MatchParams) -> Option<Vec<u8>> {
     let sequences = find_matches(data, params);
 
     if sequences.is_empty() {
-        return None; // No matches found, use raw block
+        return None;
     }
 
-    // Compute trailing literals
-    let last_seq_end = sequences.iter()
-        .fold(0u32, |acc, s| acc + s.ll + s.ml);
-    let _trailing_lits = data.len() as u32 - last_seq_end;
+    // === 1. Convert to encoded sequences (no repeat offset for now) ===
+    let encoded_seqs: Vec<EncodedSequence> = sequences.iter()
+        .map(|s| EncodedSequence { ll: s.ll, of_value: s.off + 3, ml: s.ml })
+        .collect();
 
-    // Collect all literals
+    // === 2. Collect literals ===
     let mut literals = Vec::with_capacity(data.len());
     let mut pos = 0usize;
     for seq in &sequences {
@@ -182,16 +192,87 @@ fn compress_block(data: &[u8], params: &MatchParams) -> Option<Vec<u8>> {
     }
     literals.extend_from_slice(&data[pos..]);
 
-    // Encode block content
+    // === 3. Encode block ===
     let mut block = Vec::with_capacity(data.len());
 
-    // === Literals section (Raw mode — no Huffman for simplicity) ===
-    encode_literals_raw(&mut block, &literals);
+    // Literals section: try Huffman, fall back to raw
+    let mut used_huf = false;
+    if literals.len() >= 64 {
+        if let Some(huf) = encode_literals_huffman(&literals) {
+            if huf.len() < literals.len() {
+                block.extend_from_slice(&huf);
+                used_huf = true;
+            }
+        }
+    }
+    if !used_huf {
+        encode_literals_raw(&mut block, &literals);
+    }
 
-    // === Sequences section ===
-    encode_sequences_section(&mut block, &sequences);
+    // Sequences section
+    encode_sequences_section(&mut block, &encoded_seqs);
 
     Some(block)
+}
+
+/// Resolve repeat offsets: convert raw offsets to zstd offset values.
+/// offset_value 1 = repeat offset 1, 2 = repeat offset 2, 3 = repeat offset 3.
+/// offset_value > 3 = new offset (raw_offset + 3).
+fn resolve_repeat_offsets(sequences: &[Sequence]) -> Vec<EncodedSequence> {
+    let mut rep = [1u32, 4, 8]; // initial repeat offsets per zstd spec
+    let mut out = Vec::with_capacity(sequences.len());
+
+    for seq in sequences {
+        let raw_off = seq.off;
+        let of_value;
+
+        if seq.ll > 0 {
+            // Normal case: check if raw_off matches a repeat offset
+            if raw_off == rep[0] {
+                of_value = 1;
+            } else if raw_off == rep[1] {
+                of_value = 2;
+                rep[1] = rep[0];
+                rep[0] = raw_off;
+            } else if raw_off == rep[2] {
+                of_value = 3;
+                rep[2] = rep[1];
+                rep[1] = rep[0];
+                rep[0] = raw_off;
+            } else {
+                of_value = raw_off + 3;
+                rep[2] = rep[1];
+                rep[1] = rep[0];
+                rep[0] = raw_off;
+            }
+        } else {
+            // ll == 0: repeat offset rules differ
+            // of_value 1 = rep[0] (same as before)
+            // of_value 2 = rep[1], of_value 3 = rep[2]
+            // of_value 4 = rep[0] - 1
+            if raw_off == rep[0] {
+                of_value = 1;
+            } else if raw_off == rep[1] {
+                of_value = 2;
+                rep[1] = rep[0];
+                rep[0] = raw_off;
+            } else if raw_off == rep[2] {
+                of_value = 3;
+                rep[2] = rep[1];
+                rep[1] = rep[0];
+                rep[0] = raw_off;
+            } else {
+                of_value = raw_off + 3;
+                rep[2] = rep[1];
+                rep[1] = rep[0];
+                rep[0] = raw_off;
+            }
+        }
+
+        out.push(EncodedSequence { ll: seq.ll, of_value, ml: seq.ml });
+    }
+
+    out
 }
 
 /// Hash chain match finder with configurable lazy depth.
@@ -318,6 +399,205 @@ fn hash4(data: &[u8], mask: u32) -> usize {
 }
 
 // =========================================================================
+// Huffman literal compression
+// =========================================================================
+
+/// Build Huffman codes, encode tree + streams. Returns None if Huffman doesn't help.
+fn encode_literals_huffman(literals: &[u8]) -> Option<Vec<u8>> {
+    // Count frequencies
+    let mut counts = [0u32; 256];
+    let mut max_sym = 0u8;
+    for &b in literals {
+        counts[b as usize] += 1;
+        if b > max_sym { max_sym = b; }
+    }
+    let n_used = counts.iter().filter(|&&c| c > 0).count();
+    if n_used < 2 { return None; }
+
+    // Build length-limited Huffman (max 11 bits)
+    let (codes, max_bits) = build_huffman_codes(&counts, max_sym as usize)?;
+
+    // Encode tree description (weights packed as 4-bit pairs)
+    let tree_desc = encode_huffman_tree(&codes, max_bits, max_sym as usize);
+    if tree_desc.is_empty() { return None; }
+
+    // Encode streams: single stream for < 1KB, 4 streams for >= 1KB
+    let use_4 = literals.len() >= 1024;
+    let streams = if use_4 {
+        encode_huf_4streams(literals, &codes)
+    } else {
+        encode_huf_1stream(literals, &codes)
+    };
+
+    let regen = literals.len();
+    let comp = tree_desc.len() + streams.len();
+    let lh_size = 3 + (regen >= 1024) as usize + (regen >= 16384) as usize;
+
+    let mut out = Vec::with_capacity(lh_size + comp);
+    let htype = LIT_TYPE_COMPRESSED as u32;
+
+    match lh_size {
+        3 => {
+            // bit[1:0]=type(2), bit[2]=streams_flag, bit[3]=0, bit[13:4]=regen, bit[23:14]=comp
+            let sf = if use_4 { 1u32 } else { 0u32 };
+            let lhc = htype | (sf << 2) | ((regen as u32) << 4) | ((comp as u32) << 14);
+            out.extend_from_slice(&lhc.to_le_bytes()[..3]);
+        }
+        4 => {
+            let lhc = htype | (2u32 << 2) | ((regen as u32) << 4) | ((comp as u32) << 18);
+            out.extend_from_slice(&lhc.to_le_bytes()[..4]);
+        }
+        _ => {
+            let lhc = htype | (3u32 << 2) | ((regen as u32) << 4) | ((comp as u32) << 22);
+            out.extend_from_slice(&lhc.to_le_bytes()[..4]);
+            out.push((comp >> 10) as u8);
+        }
+    }
+
+    out.extend_from_slice(&tree_desc);
+    out.extend_from_slice(&streams);
+    Some(out)
+}
+
+/// Build canonical Huffman codes, max 11 bits. Returns None if can't build valid codes.
+fn build_huffman_codes(counts: &[u32; 256], max_sym: usize) -> Option<([(u32, u8); 256], u8)> {
+    const MAX_BITS: u8 = 11;
+    let mut syms: Vec<(u32, u8)> = (0..=max_sym)
+        .filter(|&s| counts[s] > 0)
+        .map(|s| (counts[s], s as u8))
+        .collect();
+    syms.sort();
+    let n = syms.len();
+    if n < 2 { return None; }
+
+    // Assign lengths from Shannon entropy, clamp to [1, MAX_BITS]
+    let total: f64 = syms.iter().map(|&(c, _)| c as f64).sum();
+    let mut lengths = [0u8; 256];
+    for &(freq, sym) in &syms {
+        let p = freq as f64 / total;
+        lengths[sym as usize] = (-p.log2()).ceil().clamp(1.0, MAX_BITS as f64) as u8;
+    }
+
+    // Fix Kraft inequality iteratively
+    for _ in 0..1000 {
+        let kraft: i64 = (0..256).filter(|&s| lengths[s] > 0)
+            .map(|s| 1i64 << (MAX_BITS - lengths[s])).sum();
+        let target = 1i64 << MAX_BITS;
+        if kraft == target { break; }
+        if kraft > target {
+            // Over-full: lengthen least frequent symbol
+            for &(_, sym) in &syms {
+                if lengths[sym as usize] < MAX_BITS {
+                    lengths[sym as usize] += 1;
+                    break;
+                }
+            }
+        } else {
+            // Under-full: shorten most frequent symbol
+            for &(_, sym) in syms.iter().rev() {
+                if lengths[sym as usize] > 1 {
+                    lengths[sym as usize] -= 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Verify Kraft
+    let kraft: u64 = (0..256).filter(|&s| lengths[s] > 0)
+        .map(|s| 1u64 << (MAX_BITS - lengths[s])).sum();
+    if !kraft.is_power_of_two() { return None; }
+
+    let max_bits = *lengths.iter().max().unwrap_or(&0);
+    let mut bl_count = [0u32; 16];
+    for &l in &lengths { if l > 0 { bl_count[l as usize] += 1; } }
+
+    let mut next_code = [0u32; 16];
+    for bits in 1..=max_bits as usize {
+        next_code[bits] = (next_code[bits - 1] + bl_count[bits - 1]) << 1;
+    }
+
+    let mut codes = [(0u32, 0u8); 256];
+    for s in 0..256 {
+        if lengths[s] > 0 {
+            codes[s] = (next_code[lengths[s] as usize], lengths[s]);
+            next_code[lengths[s] as usize] += 1;
+        }
+    }
+
+    Some((codes, max_bits))
+}
+
+fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -> Vec<u8> {
+    if max_bits == 0 { return vec![]; }
+    let mut weights: Vec<u8> = (0..=max_sym)
+        .map(|s| if codes[s].1 > 0 { max_bits + 1 - codes[s].1 } else { 0 })
+        .collect();
+    while weights.last() == Some(&0) && weights.len() > 1 { weights.pop(); }
+    if !weights.is_empty() { weights.pop(); } // last weight is implicit
+    if weights.is_empty() || weights.len() > 255 { return vec![]; }
+
+    // Check all weights fit in 4 bits
+    if weights.iter().any(|&w| w > 12) { return vec![]; }
+
+    let num = weights.len();
+    let mut desc = Vec::with_capacity(1 + num.div_ceil(2));
+    // Direct mode header: num_weights + 127 (when <= 128)
+    // If > 128, we'd need FSE compression — skip for now
+    if num > 128 { return vec![]; }
+    desc.push((num as u8) + 127);
+    for pair in weights.chunks(2) {
+        let w0 = pair[0];
+        let w1 = if pair.len() > 1 { pair[1] } else { 0 };
+        desc.push((w0 << 4) | (w1 & 0x0F));
+    }
+    desc
+}
+
+/// Encode one Huffman stream (symbols in reverse, padded with sentinel bit).
+fn encode_huf_1stream(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
+    let mut bits: u64 = 0;
+    let mut bp: u32 = 0;
+    let mut out = Vec::with_capacity(data.len());
+    for &sym in data.iter().rev() {
+        let (code, nb) = codes[sym as usize];
+        if nb == 0 { continue; }
+        bits |= (code as u64) << bp;
+        bp += nb as u32;
+        while bp >= 8 { out.push(bits as u8); bits >>= 8; bp -= 8; }
+    }
+    // Sentinel: 1-bit padding
+    bits |= 1u64 << bp;
+    bp += 1;
+    while bp > 0 { out.push(bits as u8); bits >>= 8; bp = bp.saturating_sub(8); }
+    out.reverse(); // backward bitstream
+    out
+}
+
+fn encode_huf_4streams(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
+    let q = data.len().div_ceil(4);
+    let s1 = &data[..q];
+    let s2 = &data[q..std::cmp::min(q*2, data.len())];
+    let s3 = &data[std::cmp::min(q*2, data.len())..std::cmp::min(q*3, data.len())];
+    let s4 = &data[std::cmp::min(q*3, data.len())..];
+
+    let c1 = encode_huf_1stream(s1, codes);
+    let c2 = encode_huf_1stream(s2, codes);
+    let c3 = encode_huf_1stream(s3, codes);
+    let c4 = encode_huf_1stream(s4, codes);
+
+    let mut out = Vec::with_capacity(6 + c1.len() + c2.len() + c3.len() + c4.len());
+    out.extend_from_slice(&(c1.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(c2.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(c3.len() as u16).to_le_bytes());
+    out.extend_from_slice(&c1);
+    out.extend_from_slice(&c2);
+    out.extend_from_slice(&c3);
+    out.extend_from_slice(&c4);
+    out
+}
+
+// =========================================================================
 // Literals section encoding (Raw mode)
 // =========================================================================
 
@@ -344,7 +624,7 @@ fn encode_literals_raw(out: &mut Vec<u8>, literals: &[u8]) {
 // Sequences section encoding using exact C-compatible FSE tables
 // =========================================================================
 
-fn encode_sequences_section(out: &mut Vec<u8>, sequences: &[Sequence]) {
+fn encode_sequences_section(out: &mut Vec<u8>, sequences: &[EncodedSequence]) {
     let nb_seq = sequences.len();
 
     // Number of sequences header
@@ -382,21 +662,15 @@ fn encode_sequences_section(out: &mut Vec<u8>, sequences: &[Sequence]) {
         let llc = ll_code(seq.ll);
         let ml_base = seq.ml - ZSTD_MINMATCH as u32;
         let mlc = ml_code(ml_base);
-        // Sequence OF stores an "offset value", not the raw back-reference
-        // distance. Values 1..=3 are reserved for repeat offsets, so new
-        // offsets must be encoded as actual_offset + 3.
-        let of_value = seq.off + 3;
-        let ofc = off_code(of_value);
+        // of_value already has repeat offset resolution applied
+        let ofc = off_code(seq.of_value);
 
-        // Extra bit values = value - base_for_code
         ll_codes_v.push(llc);
         ml_codes_v.push(mlc);
         off_codes_v.push(ofc);
         ll_values.push(seq.ll - LL_BASE[llc as usize]);
         ml_values.push(seq.ml - ML_BASE[mlc as usize]);
-        // Offset extra bits reconstruct the full offset value, which the
-        // decoder later maps back to the actual offset using repcode rules.
-        off_values.push(if ofc > 0 { of_value - (1u32 << ofc) } else { 0 });
+        off_values.push(if ofc > 0 { seq.of_value - (1u32 << ofc) } else { 0 });
     }
 
     // Encode with the exact C-compatible FSE sequence encoder
