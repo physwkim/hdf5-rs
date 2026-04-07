@@ -171,7 +171,8 @@ impl GlobalHeapCollection {
             pos += 2;
             let _ref_count = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
             pos += 2;
-            let _reserved = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+            let _reserved =
+                u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
             pos += 4;
             let size = read_size(&buf[pos..], ss) as usize;
             pos += ss;
@@ -223,10 +224,7 @@ pub fn encode_vlen_reference(
 /// Decode a variable-length reference from dataset raw data.
 ///
 /// Returns `(collection_address, object_index)`.
-pub fn decode_vlen_reference(
-    buf: &[u8],
-    ctx: &FormatContext,
-) -> FormatResult<(u64, u32)> {
+pub fn decode_vlen_reference(buf: &[u8], ctx: &FormatContext) -> FormatResult<(u64, u32)> {
     let sa = ctx.sizeof_addr as usize;
     if buf.len() < sa + 4 {
         return Err(FormatError::BufferTooShort {
@@ -406,8 +404,14 @@ mod tests {
         let encoded = coll.encode(&ctx());
         let (decoded, _) = GlobalHeapCollection::decode(&encoded, &ctx()).unwrap();
         assert_eq!(decoded.get_object(1), Some([1u8].as_slice()));
-        assert_eq!(decoded.get_object(2), Some([2, 3, 4, 5, 6, 7, 8, 9, 10].as_slice()));
-        assert_eq!(decoded.get_object(3), Some([11, 12, 13, 14, 15, 16, 17, 18].as_slice()));
+        assert_eq!(
+            decoded.get_object(2),
+            Some([2, 3, 4, 5, 6, 7, 8, 9, 10].as_slice())
+        );
+        assert_eq!(
+            decoded.get_object(3),
+            Some([11, 12, 13, 14, 15, 16, 17, 18].as_slice())
+        );
     }
 
     #[test]

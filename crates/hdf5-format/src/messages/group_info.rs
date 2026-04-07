@@ -28,7 +28,6 @@ pub struct GroupInfoMessage {
 }
 
 impl GroupInfoMessage {
-
     /// Group info with phase-change thresholds.
     pub fn with_phase_change(max_compact: u16, min_dense: u16) -> Self {
         Self {

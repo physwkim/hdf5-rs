@@ -291,8 +291,7 @@ impl ObjectHeader {
             }
 
             let msg_type = buf[pos];
-            let msg_data_size =
-                u16::from_le_bytes([buf[pos + 1], buf[pos + 2]]) as usize;
+            let msg_data_size = u16::from_le_bytes([buf[pos + 1], buf[pos + 2]]) as usize;
             let msg_flags = buf[pos + 3];
             pos += 4;
 
@@ -367,8 +366,7 @@ impl ObjectHeader {
         // buf[1] = reserved
         let num_messages = u16::from_le_bytes([buf[2], buf[3]]) as usize;
         let _obj_ref_count = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
-        let header_data_size =
-            u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as usize;
+        let header_data_size = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as usize;
         // buf[12..16] = reserved alignment padding
 
         let total_consumed = 16 + header_data_size;
@@ -515,7 +513,7 @@ mod tests_v1 {
     #[test]
     fn test_decode_v1_skips_null_messages() {
         let buf = build_v1_header(&[
-            (0x00, 0x00, &[0; 8]),  // null message (type 0)
+            (0x00, 0x00, &[0; 8]), // null message (type 0)
             (0x03, 0x00, &[1, 2]),
         ]);
         let (hdr, _) = ObjectHeader::decode_v1(&buf).unwrap();

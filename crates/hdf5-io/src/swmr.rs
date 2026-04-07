@@ -55,7 +55,8 @@ impl SwmrWriter {
         let mut chunk_dims = vec![1u64];
         chunk_dims.extend_from_slice(frame_dims);
 
-        self.writer.create_chunked_dataset(name, datatype, &dims, &max_dims, &chunk_dims)
+        self.writer
+            .create_chunked_dataset(name, datatype, &dims, &max_dims, &chunk_dims)
     }
 
     /// Set the SWMR flag in the superblock.
@@ -76,9 +77,7 @@ impl SwmrWriter {
     /// and extends the dataset dimensions.
     pub fn append_frame(&mut self, ds_index: usize, data: &[u8]) -> IoResult<()> {
         // Get current frame count (dim 0)
-        let frame_idx = {
-            self.writer.datasets[ds_index].dataspace.dims[0]
-        };
+        let frame_idx = { self.writer.datasets[ds_index].dataspace.dims[0] };
 
         // 1. Write chunk data
         self.writer.write_chunk(ds_index, frame_idx, data)?;
@@ -116,7 +115,8 @@ impl SwmrWriter {
             self.writer.handle().sync_data()?;
 
             // Step 3: Re-write superblock with updated EOF.
-            self.writer.write_superblock(FLAG_WRITE_ACCESS | FLAG_SWMR_WRITE)?;
+            self.writer
+                .write_superblock(FLAG_WRITE_ACCESS | FLAG_SWMR_WRITE)?;
             self.writer.handle().sync_data()?;
         }
 

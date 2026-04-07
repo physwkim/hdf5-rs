@@ -181,10 +181,7 @@ impl DataLayoutMessage {
     /// Version 4 chunked layout with B-tree v2 index.
     ///
     /// `chunk_dims` should include the trailing element-size dimension.
-    pub fn chunked_v4_btree_v2(
-        chunk_dims: Vec<u64>,
-        index_address: u64,
-    ) -> Self {
+    pub fn chunked_v4_btree_v2(chunk_dims: Vec<u64>, index_address: u64) -> Self {
         Self::ChunkedV4 {
             flags: 0,
             chunk_dims,
@@ -329,8 +326,7 @@ impl DataLayoutMessage {
                         available: buf.len(),
                     });
                 }
-                let compact_size =
-                    u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+                let compact_size = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
                 pos += 2;
                 if buf.len() < pos + compact_size {
                     return Err(FormatError::BufferTooShort {
@@ -353,9 +349,12 @@ impl DataLayoutMessage {
                         available: buf.len(),
                     });
                 }
-                let flags = buf[pos]; pos += 1;
-                let ndims = buf[pos] as usize; pos += 1;
-                let enc_bytes = buf[pos] as usize; pos += 1;
+                let flags = buf[pos];
+                pos += 1;
+                let ndims = buf[pos] as usize;
+                pos += 1;
+                let enc_bytes = buf[pos] as usize;
+                pos += 1;
 
                 // dim sizes
                 let dim_data_len = ndims * enc_bytes;
@@ -378,11 +377,11 @@ impl DataLayoutMessage {
                         available: buf.len(),
                     });
                 }
-                let idx_type_raw = buf[pos]; pos += 1;
-                let index_type = ChunkIndexType::from_u8(idx_type_raw)
-                    .ok_or_else(|| FormatError::UnsupportedFeature(
-                        format!("chunk index type {}", idx_type_raw)
-                    ))?;
+                let idx_type_raw = buf[pos];
+                pos += 1;
+                let index_type = ChunkIndexType::from_u8(idx_type_raw).ok_or_else(|| {
+                    FormatError::UnsupportedFeature(format!("chunk index type {}", idx_type_raw))
+                })?;
 
                 // Index-type-specific parameters
                 let mut earray_params = None;
@@ -431,14 +430,17 @@ impl DataLayoutMessage {
                 let index_address = read_addr(&buf[pos..], sa);
                 pos += sa;
 
-                Ok((Self::ChunkedV4 {
-                    flags,
-                    chunk_dims,
-                    index_type,
-                    earray_params,
-                    farray_params,
-                    index_address,
-                }, pos))
+                Ok((
+                    Self::ChunkedV4 {
+                        flags,
+                        chunk_dims,
+                        index_type,
+                        earray_params,
+                        farray_params,
+                        index_address,
+                    },
+                    pos,
+                ))
             }
             (VERSION_3, other) => Err(FormatError::UnsupportedFeature(format!(
                 "data layout class {}",
@@ -625,11 +627,7 @@ mod tests {
     #[test]
     fn roundtrip_chunked_v4_earray() {
         let params = EarrayParams::default_params();
-        let msg = DataLayoutMessage::chunked_v4_earray(
-            vec![1, 256, 256],
-            params,
-            0x2000,
-        );
+        let msg = DataLayoutMessage::chunked_v4_earray(vec![1, 256, 256], params, 0x2000);
         let encoded = msg.encode(&ctx8());
         assert_eq!(encoded[0], 4); // version 4
         assert_eq!(encoded[1], 2); // class chunked
@@ -641,11 +639,7 @@ mod tests {
     #[test]
     fn roundtrip_chunked_v4_earray_ctx4() {
         let params = EarrayParams::default_params();
-        let msg = DataLayoutMessage::chunked_v4_earray(
-            vec![1, 128],
-            params,
-            0x1000,
-        );
+        let msg = DataLayoutMessage::chunked_v4_earray(vec![1, 128], params, 0x1000);
         let encoded = msg.encode(&ctx4());
         let (decoded, consumed) = DataLayoutMessage::decode(&encoded, &ctx4()).unwrap();
         assert_eq!(consumed, encoded.len());
@@ -665,11 +659,7 @@ mod tests {
     fn chunked_v4_enc_bytes() {
         // chunk dims [1, 256, 256]: max=256, needs 2 bytes
         let params = EarrayParams::default_params();
-        let msg = DataLayoutMessage::chunked_v4_earray(
-            vec![1, 256, 256],
-            params,
-            0x2000,
-        );
+        let msg = DataLayoutMessage::chunked_v4_earray(vec![1, 256, 256], params, 0x2000);
         let encoded = msg.encode(&ctx8());
         // version(1) + class(1) + flags(1) + ndims(1) + enc_bytes(1)
         // + 3*2 dim bytes + index_type(1) + 5 earray params + 8 addr = 25
@@ -681,11 +671,7 @@ mod tests {
     fn chunked_v4_large_dims() {
         // Large dims requiring 4 bytes each
         let params = EarrayParams::default_params();
-        let msg = DataLayoutMessage::chunked_v4_earray(
-            vec![1, 65536],
-            params,
-            0x4000,
-        );
+        let msg = DataLayoutMessage::chunked_v4_earray(vec![1, 65536], params, 0x4000);
         let encoded = msg.encode(&ctx8());
         assert_eq!(encoded[4], 3); // enc_bytes_per_dim = 3 (65536 = 0x10000, needs 3 bytes)
     }

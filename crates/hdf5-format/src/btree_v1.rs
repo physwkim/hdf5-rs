@@ -182,10 +182,11 @@ mod tests {
     #[test]
     fn decode_leaf_node() {
         let buf = build_group_btree(
-            0,                        // leaf
-            &[0, 8, 16],             // 3 keys
-            &[0x100, 0x200],          // 2 children (SNOD addresses)
-            8, 8,
+            0,               // leaf
+            &[0, 8, 16],     // 3 keys
+            &[0x100, 0x200], // 2 children (SNOD addresses)
+            8,
+            8,
         );
         let node = BTreeV1Node::decode(&buf, 8, 8).unwrap();
         assert_eq!(node.node_type, 0);
@@ -200,10 +201,11 @@ mod tests {
     #[test]
     fn decode_internal_node() {
         let buf = build_group_btree(
-            1,                        // internal
-            &[0, 100],               // 2 keys
-            &[0x500],                 // 1 child (sub-TREE address)
-            8, 8,
+            1,         // internal
+            &[0, 100], // 2 keys
+            &[0x500],  // 1 child (sub-TREE address)
+            8,
+            8,
         );
         let node = BTreeV1Node::decode(&buf, 8, 8).unwrap();
         assert_eq!(node.level, 1);
@@ -213,12 +215,7 @@ mod tests {
 
     #[test]
     fn decode_single_entry() {
-        let buf = build_group_btree(
-            0,
-            &[0, 8],
-            &[0x100],
-            8, 8,
-        );
+        let buf = build_group_btree(0, &[0, 8], &[0x100], 8, 8);
         let node = BTreeV1Node::decode(&buf, 8, 8).unwrap();
         assert_eq!(node.entries_used, 1);
         assert_eq!(node.children.len(), 1);

@@ -92,9 +92,8 @@ pub fn local_heap_get_string(heap_data: &[u8], offset: u64) -> FormatResult<Stri
         .map(|p| start + p)
         .unwrap_or(heap_data.len());
 
-    String::from_utf8(heap_data[start..end].to_vec()).map_err(|e| {
-        FormatError::InvalidData(format!("invalid UTF-8 in local heap string: {}", e))
-    })
+    String::from_utf8(heap_data[start..end].to_vec())
+        .map_err(|e| FormatError::InvalidData(format!("invalid UTF-8 in local heap string: {}", e)))
 }
 
 /// Read a little-endian unsigned integer of `n` bytes into a u64.

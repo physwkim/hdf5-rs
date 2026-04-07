@@ -225,8 +225,14 @@ impl DatatypeMessage {
         Self::Enum {
             base: Box::new(Self::u8_type()),
             members: vec![
-                EnumMember { name: "FALSE".to_string(), value: vec![0] },
-                EnumMember { name: "TRUE".to_string(), value: vec![1] },
+                EnumMember {
+                    name: "FALSE".to_string(),
+                    value: vec![0],
+                },
+                EnumMember {
+                    name: "TRUE".to_string(),
+                    value: vec![1],
+                },
             ],
         }
     }
@@ -317,9 +323,7 @@ impl DatatypeMessage {
     /// `sizeof_addr`.
     pub fn element_size_ctx(&self, ctx: &FormatContext) -> u32 {
         match self {
-            Self::VarLenString { .. } => {
-                ctx.sizeof_addr as u32 + 4
-            }
+            Self::VarLenString { .. } => ctx.sizeof_addr as u32 + 4,
             _ => self.element_size(),
         }
     }
@@ -659,8 +663,7 @@ impl DatatypeMessage {
                 let exponent_size = buf[13];
                 let mantissa_location = buf[14];
                 let mantissa_size = buf[15];
-                let exponent_bias =
-                    u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
+                let exponent_bias = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
 
                 Ok((
                     Self::FloatingPoint {
@@ -742,7 +745,12 @@ impl DatatypeMessage {
                                 available: buf.len(),
                             });
                         }
-                        let o = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+                        let o = u32::from_le_bytes([
+                            buf[pos],
+                            buf[pos + 1],
+                            buf[pos + 2],
+                            buf[pos + 3],
+                        ]);
                         pos += 4;
 
                         // Version 1 has additional fields: dimensionality(1),
@@ -765,7 +773,12 @@ impl DatatypeMessage {
                                 available: buf.len(),
                             });
                         }
-                        let o = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+                        let o = u32::from_le_bytes([
+                            buf[pos],
+                            buf[pos + 1],
+                            buf[pos + 2],
+                            buf[pos + 3],
+                        ]);
                         pos += 4;
                         o
                     };
@@ -811,7 +824,7 @@ impl DatatypeMessage {
                     }
                     let name = String::from_utf8_lossy(&buf[name_start..pos]).to_string();
                     pos += 1; // skip null
-                    // Version 1: pad name (including null) to 8-byte boundary
+                              // Version 1: pad name (including null) to 8-byte boundary
                     let name_field_len = pos - name_start;
                     let padded = (name_field_len + 7) & !7;
                     pos = name_start + padded;
@@ -899,7 +912,8 @@ impl DatatypeMessage {
                 }
                 let mut dims = Vec::with_capacity(ndims);
                 for _ in 0..ndims {
-                    let d = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
+                    let d =
+                        u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
                     pos += 4;
                     dims.push(d);
                 }
@@ -1214,9 +1228,9 @@ mod tests {
     fn vlen_string_class_encoding() {
         let encoded = DatatypeMessage::vlen_string_utf8().encode(&ctx());
         assert_eq!(encoded[0] & 0x0F, CLASS_VLEN); // class = 9
-        assert_eq!(encoded[0] >> 4, DT_VERSION);    // version = 1
-        assert_eq!(encoded[1] & 0x0F, 1);           // type = string
-        assert_eq!(encoded[2] & 0x0F, 1);           // charset = UTF-8
+        assert_eq!(encoded[0] >> 4, DT_VERSION); // version = 1
+        assert_eq!(encoded[1] & 0x0F, 1); // type = string
+        assert_eq!(encoded[2] & 0x0F, 1); // charset = UTF-8
     }
 
     #[test]
@@ -1279,16 +1293,17 @@ mod tests {
 
     #[test]
     fn compound_class_encoding() {
-        let msg = DatatypeMessage::compound(4, vec![
-            CompoundMember {
+        let msg = DatatypeMessage::compound(
+            4,
+            vec![CompoundMember {
                 name: "val".to_string(),
                 offset: 0,
                 datatype: DatatypeMessage::i32_type(),
-            },
-        ]);
+            }],
+        );
         let encoded = msg.encode(&ctx());
         assert_eq!(encoded[0] & 0x0F, CLASS_COMPOUND); // class = 6
-        assert_eq!(encoded[0] >> 4, 3);                // version = 3
+        assert_eq!(encoded[0] >> 4, 3); // version = 3
     }
 
     #[test]
@@ -1336,9 +1351,18 @@ mod tests {
         let msg = DatatypeMessage::enumeration(
             DatatypeMessage::u8_type(),
             vec![
-                EnumMember { name: "RED".to_string(), value: vec![0] },
-                EnumMember { name: "GREEN".to_string(), value: vec![1] },
-                EnumMember { name: "BLUE".to_string(), value: vec![2] },
+                EnumMember {
+                    name: "RED".to_string(),
+                    value: vec![0],
+                },
+                EnumMember {
+                    name: "GREEN".to_string(),
+                    value: vec![1],
+                },
+                EnumMember {
+                    name: "BLUE".to_string(),
+                    value: vec![2],
+                },
             ],
         );
         let encoded = msg.encode(&ctx());
@@ -1352,8 +1376,14 @@ mod tests {
         let msg = DatatypeMessage::enumeration(
             DatatypeMessage::i32_type(),
             vec![
-                EnumMember { name: "A".to_string(), value: vec![0, 0, 0, 0] },
-                EnumMember { name: "B".to_string(), value: vec![1, 0, 0, 0] },
+                EnumMember {
+                    name: "A".to_string(),
+                    value: vec![0, 0, 0, 0],
+                },
+                EnumMember {
+                    name: "B".to_string(),
+                    value: vec![1, 0, 0, 0],
+                },
             ],
         );
         assert_eq!(msg.element_size(), 4);
@@ -1363,7 +1393,10 @@ mod tests {
     fn enum_class_encoding() {
         let msg = DatatypeMessage::enumeration(
             DatatypeMessage::u8_type(),
-            vec![EnumMember { name: "X".to_string(), value: vec![0] }],
+            vec![EnumMember {
+                name: "X".to_string(),
+                value: vec![0],
+            }],
         );
         let encoded = msg.encode(&ctx());
         assert_eq!(encoded[0] & 0x0F, CLASS_ENUM);
@@ -1401,7 +1434,7 @@ mod tests {
         let msg = DatatypeMessage::array(vec![5], DatatypeMessage::u8_type());
         let encoded = msg.encode(&ctx());
         assert_eq!(encoded[0] & 0x0F, CLASS_ARRAY); // class = 10
-        assert_eq!(encoded[0] >> 4, 3);             // version = 3
+        assert_eq!(encoded[0] >> 4, 3); // version = 3
     }
 
     #[test]

@@ -17,12 +17,18 @@ pub struct BitWriter {
 }
 
 impl Default for BitWriter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BitWriter {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(256), bit_pos: 0, current: 0 }
+        Self {
+            buf: Vec::with_capacity(256),
+            bit_pos: 0,
+            current: 0,
+        }
     }
 
     pub fn write_bits(&mut self, value: u64, nbits: u32) {
@@ -45,7 +51,9 @@ impl BitWriter {
     }
 
     pub fn finish(mut self) -> Vec<u8> {
-        if self.bit_pos > 0 { self.buf.push(self.current); }
+        if self.bit_pos > 0 {
+            self.buf.push(self.current);
+        }
         self.buf
     }
 
@@ -69,22 +77,34 @@ pub struct BackwardBitWriter {
 }
 
 impl Default for BackwardBitWriter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BackwardBitWriter {
     pub fn new() -> Self {
-        Self { container: 0, bit_pos: 0, buf: Vec::with_capacity(256) }
+        Self {
+            container: 0,
+            bit_pos: 0,
+            buf: Vec::with_capacity(256),
+        }
     }
 
     /// Add `nbits` from the low bits of `value` to the container.
     /// Matches: `BIT_addBits(bitC, value, nbBits)`
     #[inline]
     pub fn add_bits(&mut self, value: u64, nbits: u32) {
-        if nbits == 0 { return; }
+        if nbits == 0 {
+            return;
+        }
         debug_assert!(nbits <= 57);
         debug_assert!(self.bit_pos + nbits <= 64);
-        let mask = if nbits >= 64 { u64::MAX } else { (1u64 << nbits) - 1 };
+        let mask = if nbits >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << nbits) - 1
+        };
         self.container |= (value & mask) << self.bit_pos;
         self.bit_pos += nbits;
     }

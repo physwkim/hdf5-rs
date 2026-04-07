@@ -117,16 +117,24 @@ impl H5Type for f64 {
 pub struct HBool(pub u8);
 
 impl From<bool> for HBool {
-    fn from(b: bool) -> Self { Self(b as u8) }
+    fn from(b: bool) -> Self {
+        Self(b as u8)
+    }
 }
 
 impl From<HBool> for bool {
-    fn from(h: HBool) -> Self { h.0 != 0 }
+    fn from(h: HBool) -> Self {
+        h.0 != 0
+    }
 }
 
 impl H5Type for HBool {
-    fn hdf5_type() -> DatatypeMessage { DatatypeMessage::bool_type() }
-    fn element_size() -> usize { 1 }
+    fn hdf5_type() -> DatatypeMessage {
+        DatatypeMessage::bool_type()
+    }
+    fn element_size() -> usize {
+        1
+    }
 }
 
 /// Complex number with f32 real and imaginary parts (8 bytes total).
@@ -143,12 +151,22 @@ impl H5Type for Complex32 {
         DatatypeMessage::Compound {
             size: 8,
             members: vec![
-                CompoundMember { name: "r".to_string(), offset: 0, datatype: DatatypeMessage::f32_type() },
-                CompoundMember { name: "i".to_string(), offset: 4, datatype: DatatypeMessage::f32_type() },
+                CompoundMember {
+                    name: "r".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::f32_type(),
+                },
+                CompoundMember {
+                    name: "i".to_string(),
+                    offset: 4,
+                    datatype: DatatypeMessage::f32_type(),
+                },
             ],
         }
     }
-    fn element_size() -> usize { 8 }
+    fn element_size() -> usize {
+        8
+    }
 }
 
 /// Complex number with f64 real and imaginary parts (16 bytes total).
@@ -165,12 +183,22 @@ impl H5Type for Complex64 {
         DatatypeMessage::Compound {
             size: 16,
             members: vec![
-                CompoundMember { name: "r".to_string(), offset: 0, datatype: DatatypeMessage::f64_type() },
-                CompoundMember { name: "i".to_string(), offset: 8, datatype: DatatypeMessage::f64_type() },
+                CompoundMember {
+                    name: "r".to_string(),
+                    offset: 0,
+                    datatype: DatatypeMessage::f64_type(),
+                },
+                CompoundMember {
+                    name: "i".to_string(),
+                    offset: 8,
+                    datatype: DatatypeMessage::f64_type(),
+                },
             ],
         }
     }
-    fn element_size() -> usize { 16 }
+    fn element_size() -> usize {
+        16
+    }
 }
 
 /// A description of a compound (struct) type for use with HDF5 datasets.
@@ -238,8 +266,7 @@ impl CompoundType {
 /// let s: VarLenUnicode = "hello".parse().unwrap();
 /// assert_eq!(s.0, "hello");
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VarLenUnicode(pub String);
 
 impl std::str::FromStr for VarLenUnicode {

@@ -27,16 +27,35 @@ fn bench_level(_name: &str, data: &[u8], level: i32, iterations: u32) -> (f64, f
 fn zstd_speed_comparison() {
     let datasets: Vec<(&str, Vec<u8>)> = vec![
         ("zeros_1M", vec![0u8; 1_048_576]),
-        ("text_1M", b"The quick brown fox jumps over the lazy dog. Hello world! ".repeat(18000)),
-        ("f64_seq_1M", (0..131072u64).flat_map(|i| (i as f64).to_le_bytes()).collect()),
-        ("mixed_1M", (0..262144u32).flat_map(|i| {
-            if i % 4 == 0 { [0u8; 4] } else { i.to_le_bytes() }
-        }).collect()),
+        (
+            "text_1M",
+            b"The quick brown fox jumps over the lazy dog. Hello world! ".repeat(18000),
+        ),
+        (
+            "f64_seq_1M",
+            (0..131072u64)
+                .flat_map(|i| (i as f64).to_le_bytes())
+                .collect(),
+        ),
+        (
+            "mixed_1M",
+            (0..262144u32)
+                .flat_map(|i| {
+                    if i % 4 == 0 {
+                        [0u8; 4]
+                    } else {
+                        i.to_le_bytes()
+                    }
+                })
+                .collect(),
+        ),
     ];
 
     eprintln!("\n{:=<95}", "");
-    eprintln!("{:<15} {:>6} {:>10} {:>10} {:>8} {:>10} {:>10} {:>8}",
-        "Dataset", "Level", "CompSize", "Ratio", "CompMB/s", "DecompSz", "DecTime", "DecMB/s");
+    eprintln!(
+        "{:<15} {:>6} {:>10} {:>10} {:>8} {:>10} {:>10} {:>8}",
+        "Dataset", "Level", "CompSize", "Ratio", "CompMB/s", "DecompSz", "DecTime", "DecMB/s"
+    );
     eprintln!("{:-<95}", "");
 
     for (name, data) in &datasets {
@@ -48,8 +67,17 @@ fn zstd_speed_comparison() {
             let ratio = data.len() as f64 / cs as f64;
             let comp_mbps = mb / ct;
             let dec_mbps = mb / dt;
-            eprintln!("{:<15} {:>6} {:>10} {:>9.2}x {:>7.0} {:>10} {:>10.1}µs {:>7.0}",
-                name, level, cs, ratio, comp_mbps, data.len(), dt * 1e6, dec_mbps);
+            eprintln!(
+                "{:<15} {:>6} {:>10} {:>9.2}x {:>7.0} {:>10} {:>10.1}µs {:>7.0}",
+                name,
+                level,
+                cs,
+                ratio,
+                comp_mbps,
+                data.len(),
+                dt * 1e6,
+                dec_mbps
+            );
         }
         eprintln!("{:-<95}", "");
     }

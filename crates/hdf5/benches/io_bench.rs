@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use hdf5::H5File;
 
 fn bench_contiguous_write(c: &mut Criterion) {
@@ -53,26 +53,32 @@ fn bench_chunked_write(c: &mut Criterion) {
         let ncols = 100;
         let total_bytes = nframes * ncols * 8;
         group.throughput(Throughput::Bytes(total_bytes as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(nframes), &nframes, |b, &nframes| {
-            b.iter(|| {
-                let path = std::env::temp_dir().join("bench_chunked.h5");
-                let file = H5File::create(&path).unwrap();
-                let ds = file.new_dataset::<f64>()
-                    .shape([0, ncols])
-                    .chunk(&[1, ncols])
-                    .max_shape(&[None, Some(ncols)])
-                    .create("stream")
-                    .unwrap();
-                for frame in 0..nframes {
-                    let vals: Vec<f64> = (0..ncols).map(|i| (frame * ncols + i) as f64).collect();
-                    let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
-                    ds.write_chunk(frame, &raw).unwrap();
-                }
-                ds.extend(&[nframes, ncols]).unwrap();
-                file.close().unwrap();
-                std::fs::remove_file(&path).ok();
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(nframes),
+            &nframes,
+            |b, &nframes| {
+                b.iter(|| {
+                    let path = std::env::temp_dir().join("bench_chunked.h5");
+                    let file = H5File::create(&path).unwrap();
+                    let ds = file
+                        .new_dataset::<f64>()
+                        .shape([0, ncols])
+                        .chunk(&[1, ncols])
+                        .max_shape(&[None, Some(ncols)])
+                        .create("stream")
+                        .unwrap();
+                    for frame in 0..nframes {
+                        let vals: Vec<f64> =
+                            (0..ncols).map(|i| (frame * ncols + i) as f64).collect();
+                        let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        ds.write_chunk(frame, &raw).unwrap();
+                    }
+                    ds.extend(&[nframes, ncols]).unwrap();
+                    file.close().unwrap();
+                    std::fs::remove_file(&path).ok();
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -83,27 +89,33 @@ fn bench_compressed_write(c: &mut Criterion) {
         let ncols = 100;
         let total_bytes = nframes * ncols * 8;
         group.throughput(Throughput::Bytes(total_bytes as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(nframes), &nframes, |b, &nframes| {
-            b.iter(|| {
-                let path = std::env::temp_dir().join("bench_compressed.h5");
-                let file = H5File::create(&path).unwrap();
-                let ds = file.new_dataset::<f64>()
-                    .shape([0, ncols])
-                    .chunk(&[1, ncols])
-                    .max_shape(&[None, Some(ncols)])
-                    .deflate(6)
-                    .create("stream")
-                    .unwrap();
-                for frame in 0..nframes {
-                    let vals: Vec<f64> = (0..ncols).map(|i| (frame * ncols + i) as f64).collect();
-                    let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
-                    ds.write_chunk(frame, &raw).unwrap();
-                }
-                ds.extend(&[nframes, ncols]).unwrap();
-                file.close().unwrap();
-                std::fs::remove_file(&path).ok();
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(nframes),
+            &nframes,
+            |b, &nframes| {
+                b.iter(|| {
+                    let path = std::env::temp_dir().join("bench_compressed.h5");
+                    let file = H5File::create(&path).unwrap();
+                    let ds = file
+                        .new_dataset::<f64>()
+                        .shape([0, ncols])
+                        .chunk(&[1, ncols])
+                        .max_shape(&[None, Some(ncols)])
+                        .deflate(6)
+                        .create("stream")
+                        .unwrap();
+                    for frame in 0..nframes {
+                        let vals: Vec<f64> =
+                            (0..ncols).map(|i| (frame * ncols + i) as f64).collect();
+                        let raw: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        ds.write_chunk(frame, &raw).unwrap();
+                    }
+                    ds.extend(&[nframes, ncols]).unwrap();
+                    file.close().unwrap();
+                    std::fs::remove_file(&path).ok();
+                });
+            },
+        );
     }
     group.finish();
 }

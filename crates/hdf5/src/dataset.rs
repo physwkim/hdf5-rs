@@ -6,7 +6,7 @@
 
 use crate::attribute::AttrBuilder;
 use crate::error::{Hdf5Error, Result};
-use crate::file::{H5FileInner, SharedInner, borrow_inner, borrow_inner_mut, clone_inner};
+use crate::file::{borrow_inner, borrow_inner_mut, clone_inner, H5FileInner, SharedInner};
 use crate::types::H5Type;
 
 // ---------------------------------------------------------------------------
@@ -171,9 +171,11 @@ impl<T: H5Type> DatasetBuilder<T> {
                 match &mut *inner {
                     H5FileInner::Writer(writer) => {
                         let idx = if let Some(level) = self.shuffle_deflate_level {
-                            let pipeline = hdf5_format::messages::filter::FilterPipeline::shuffle_deflate(
-                                T::element_size() as u32, level,
-                            );
+                            let pipeline =
+                                hdf5_format::messages::filter::FilterPipeline::shuffle_deflate(
+                                    T::element_size() as u32,
+                                    level,
+                                );
                             writer.create_chunked_dataset_with_pipeline(
                                 &full_name, datatype, &dims_u64, &max_u64, &chunk_u64, pipeline,
                             )?
@@ -188,7 +190,7 @@ impl<T: H5Type> DatasetBuilder<T> {
                         };
                         if let Some(ref gp) = group_path {
                             if gp != "/" {
-                                        writer.assign_dataset_to_group(gp, idx)?;
+                                writer.assign_dataset_to_group(gp, idx)?;
                             }
                         }
                         idx
@@ -222,7 +224,7 @@ impl<T: H5Type> DatasetBuilder<T> {
                         let idx = writer.create_dataset(&full_name, datatype, &dims_u64)?;
                         if let Some(ref gp) = group_path {
                             if gp != "/" {
-                                        writer.assign_dataset_to_group(gp, idx)?;
+                                writer.assign_dataset_to_group(gp, idx)?;
                             }
                         }
                         idx
@@ -350,9 +352,18 @@ impl H5Dataset {
                 let inner = borrow_inner(&self.file_inner);
                 if let H5FileInner::Reader(reader) = &*inner {
                     if let Some(info) = reader.dataset_info(name) {
-                        if let hdf5_format::messages::data_layout::DataLayoutMessage::ChunkedV4 { chunk_dims, .. } = &info.layout {
+                        if let hdf5_format::messages::data_layout::DataLayoutMessage::ChunkedV4 {
+                            chunk_dims,
+                            ..
+                        } = &info.layout
+                        {
                             // Strip trailing element-size dimension
-                            return Some(chunk_dims[..chunk_dims.len() - 1].iter().map(|&d| d as usize).collect());
+                            return Some(
+                                chunk_dims[..chunk_dims.len() - 1]
+                                    .iter()
+                                    .map(|&d| d as usize)
+                                    .collect(),
+                            );
                         }
                     }
                 }
@@ -371,7 +382,10 @@ impl H5Dataset {
                 match &*inner {
                     H5FileInner::Reader(reader) => {
                         if let Some(info) = reader.dataset_info(name) {
-                            matches!(info.layout, hdf5_format::messages::data_layout::DataLayoutMessage::ChunkedV4 { .. })
+                            matches!(
+                                info.layout,
+                                hdf5_format::messages::data_layout::DataLayoutMessage::ChunkedV4 { .. }
+                            )
                         } else {
                             false
                         }
@@ -388,9 +402,7 @@ impl H5Dataset {
             DatasetInfo::Reader { name, .. } => {
                 let inner = borrow_inner(&self.file_inner);
                 match &*inner {
-                    H5FileInner::Reader(reader) => {
-                        Ok(reader.dataset_attr_names(name)?)
-                    }
+                    H5FileInner::Reader(reader) => Ok(reader.dataset_attr_names(name)?),
                     _ => Err(Hdf5Error::InvalidState("file is not in read mode".into())),
                 }
             }
@@ -497,9 +509,8 @@ impl H5Dataset {
                 // byte representation. The resulting slice borrows `data` and
                 // lives only as long as this block.
                 let byte_len = data.len() * T::element_size();
-                let raw = unsafe {
-                    std::slice::from_raw_parts(data.as_ptr() as *const u8, byte_len)
-                };
+                let raw =
+                    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, byte_len) };
 
                 let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
@@ -542,9 +553,9 @@ impl H5Dataset {
                     )),
                 }
             }
-            DatasetInfo::Reader { .. } => Err(Hdf5Error::InvalidState(
-                "cannot write in read mode".into(),
-            )),
+            DatasetInfo::Reader { .. } => {
+                Err(Hdf5Error::InvalidState("cannot write in read mode".into()))
+            }
         }
     }
 
@@ -561,7 +572,8 @@ impl H5Dataset {
                         "write_chunks_batch is only for chunked datasets".into(),
                     ));
                 }
-                let pairs: Vec<(u64, &[u8])> = chunks.iter()
+                let pairs: Vec<(u64, &[u8])> = chunks
+                    .iter()
                     .map(|(idx, data)| (*idx as u64, *data))
                     .collect();
                 let mut inner = borrow_inner_mut(&self.file_inner);
@@ -570,12 +582,14 @@ impl H5Dataset {
                         writer.write_chunks_batch(*index, &pairs)?;
                         Ok(())
                     }
-                    _ => Err(Hdf5Error::InvalidState("file is no longer in write mode".into())),
+                    _ => Err(Hdf5Error::InvalidState(
+                        "file is no longer in write mode".into(),
+                    )),
                 }
             }
-            DatasetInfo::Reader { .. } => Err(Hdf5Error::InvalidState(
-                "cannot write in read mode".into(),
-            )),
+            DatasetInfo::Reader { .. } => {
+                Err(Hdf5Error::InvalidState("cannot write in read mode".into()))
+            }
         }
     }
 
@@ -601,9 +615,9 @@ impl H5Dataset {
                     )),
                 }
             }
-            DatasetInfo::Reader { .. } => Err(Hdf5Error::InvalidState(
-                "cannot extend in read mode".into(),
-            )),
+            DatasetInfo::Reader { .. } => {
+                Err(Hdf5Error::InvalidState("cannot extend in read mode".into()))
+            }
         }
     }
 
@@ -630,11 +644,14 @@ impl H5Dataset {
     /// `starts[d]` = first index along dim d, `counts[d]` = how many elements.
     pub fn read_slice<T: H5Type>(&self, starts: &[usize], counts: &[usize]) -> Result<Vec<T>> {
         match &self.info {
-            DatasetInfo::Reader { name, element_size, .. } => {
+            DatasetInfo::Reader {
+                name, element_size, ..
+            } => {
                 if T::element_size() != *element_size {
                     return Err(Hdf5Error::TypeMismatch(format!(
                         "read type has element size {} but dataset has element size {}",
-                        T::element_size(), element_size,
+                        T::element_size(),
+                        element_size,
                     )));
                 }
                 let starts_u64: Vec<u64> = starts.iter().map(|&s| s as u64).collect();
@@ -646,14 +663,17 @@ impl H5Dataset {
                         H5FileInner::Reader(reader) => {
                             reader.read_slice(name, &starts_u64, &counts_u64)?
                         }
-                        _ => return Err(Hdf5Error::InvalidState("file is not in read mode".into())),
+                        _ => {
+                            return Err(Hdf5Error::InvalidState("file is not in read mode".into()))
+                        }
                     }
                 };
 
                 if raw.len() % T::element_size() != 0 {
                     return Err(Hdf5Error::TypeMismatch(format!(
                         "raw data size {} is not a multiple of element size {}",
-                        raw.len(), T::element_size(),
+                        raw.len(),
+                        T::element_size(),
                     )));
                 }
 
@@ -661,7 +681,9 @@ impl H5Dataset {
                 let mut result = Vec::<T>::with_capacity(count);
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        raw.as_ptr(), result.as_mut_ptr() as *mut u8, raw.len(),
+                        raw.as_ptr(),
+                        result.as_mut_ptr() as *mut u8,
+                        raw.len(),
                     );
                     result.set_len(count);
                 }
@@ -676,9 +698,19 @@ impl H5Dataset {
     /// Write a typed slice to a sub-region of a contiguous dataset.
     ///
     /// `starts` and `counts` define the N-dimensional selection.
-    pub fn write_slice<T: H5Type>(&self, starts: &[usize], counts: &[usize], data: &[T]) -> Result<()> {
+    pub fn write_slice<T: H5Type>(
+        &self,
+        starts: &[usize],
+        counts: &[usize],
+        data: &[T],
+    ) -> Result<()> {
         match &self.info {
-            DatasetInfo::Writer { index, element_size, chunked, .. } => {
+            DatasetInfo::Writer {
+                index,
+                element_size,
+                chunked,
+                ..
+            } => {
                 if *chunked {
                     return Err(Hdf5Error::InvalidState(
                         "write_slice is only for contiguous datasets".into(),
@@ -687,7 +719,8 @@ impl H5Dataset {
                 if T::element_size() != *element_size {
                     return Err(Hdf5Error::TypeMismatch(format!(
                         "write type has element size {} but dataset expects {}",
-                        T::element_size(), element_size,
+                        T::element_size(),
+                        element_size,
                     )));
                 }
 
@@ -695,7 +728,8 @@ impl H5Dataset {
                 if data.len() != expected {
                     return Err(Hdf5Error::InvalidState(format!(
                         "data length {} does not match slice size {}",
-                        data.len(), expected,
+                        data.len(),
+                        expected,
                     )));
                 }
 
@@ -703,9 +737,8 @@ impl H5Dataset {
                 let counts_u64: Vec<u64> = counts.iter().map(|&c| c as u64).collect();
 
                 let byte_len = data.len() * T::element_size();
-                let raw = unsafe {
-                    std::slice::from_raw_parts(data.as_ptr() as *const u8, byte_len)
-                };
+                let raw =
+                    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, byte_len) };
 
                 let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
@@ -713,12 +746,14 @@ impl H5Dataset {
                         writer.write_slice(*index, &starts_u64, &counts_u64, raw)?;
                         Ok(())
                     }
-                    _ => Err(Hdf5Error::InvalidState("file is no longer in write mode".into())),
+                    _ => Err(Hdf5Error::InvalidState(
+                        "file is no longer in write mode".into(),
+                    )),
                 }
             }
-            DatasetInfo::Reader { .. } => Err(Hdf5Error::InvalidState(
-                "cannot write in read mode".into(),
-            )),
+            DatasetInfo::Reader { .. } => {
+                Err(Hdf5Error::InvalidState("cannot write in read mode".into()))
+            }
         }
     }
 
@@ -731,9 +766,7 @@ impl H5Dataset {
             DatasetInfo::Reader { name, .. } => {
                 let mut inner = borrow_inner_mut(&self.file_inner);
                 match &mut *inner {
-                    H5FileInner::Reader(reader) => {
-                        Ok(reader.read_vlen_strings(name)?)
-                    }
+                    H5FileInner::Reader(reader) => Ok(reader.read_vlen_strings(name)?),
                     _ => Err(Hdf5Error::InvalidState("file is not in read mode".into())),
                 }
             }
@@ -757,9 +790,7 @@ impl H5Dataset {
     pub fn read_raw<T: H5Type>(&self) -> Result<Vec<T>> {
         match &self.info {
             DatasetInfo::Reader {
-                name,
-                element_size,
-                ..
+                name, element_size, ..
             } => {
                 if T::element_size() != *element_size {
                     return Err(Hdf5Error::TypeMismatch(format!(
@@ -774,9 +805,7 @@ impl H5Dataset {
                     match &mut *inner {
                         H5FileInner::Reader(reader) => reader.read_dataset_raw(name)?,
                         _ => {
-                            return Err(Hdf5Error::InvalidState(
-                                "file is not in read mode".into(),
-                            ));
+                            return Err(Hdf5Error::InvalidState("file is not in read mode".into()));
                         }
                     }
                 };
@@ -875,7 +904,11 @@ mod tests {
 
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<i32>().shape([2, 3]).create("matrix").unwrap();
+            let ds = file
+                .new_dataset::<i32>()
+                .shape([2, 3])
+                .create("matrix")
+                .unwrap();
             ds.write_raw(&data).unwrap();
             file.close().unwrap();
         }
@@ -1021,7 +1054,11 @@ mod tests {
         let data: Vec<i32> = (0..20).collect();
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<i32>().shape([4, 5]).create("mat").unwrap();
+            let ds = file
+                .new_dataset::<i32>()
+                .shape([4, 5])
+                .create("mat")
+                .unwrap();
             ds.write_raw(&data).unwrap();
             file.close().unwrap();
         }
@@ -1044,10 +1081,15 @@ mod tests {
 
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<f32>().shape([3, 4]).create("data").unwrap();
+            let ds = file
+                .new_dataset::<f32>()
+                .shape([3, 4])
+                .create("data")
+                .unwrap();
             ds.write_raw(&[0.0f32; 12]).unwrap();
             // Overwrite a 2x2 sub-region
-            ds.write_slice(&[1, 1], &[2, 2], &[10.0f32, 20.0, 30.0, 40.0]).unwrap();
+            ds.write_slice(&[1, 1], &[2, 2], &[10.0f32, 20.0, 30.0, 40.0])
+                .unwrap();
             file.close().unwrap();
         }
         {
@@ -1057,11 +1099,10 @@ mod tests {
             // Row 0: [0,0,0,0]
             // Row 1: [0,10,20,0]
             // Row 2: [0,30,40,0]
-            assert_eq!(full, vec![
-                0.0, 0.0, 0.0, 0.0,
-                0.0, 10.0, 20.0, 0.0,
-                0.0, 30.0, 40.0, 0.0,
-            ]);
+            assert_eq!(
+                full,
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 20.0, 0.0, 0.0, 30.0, 40.0, 0.0,]
+            );
         }
 
         std::fs::remove_file(&path).ok();
@@ -1076,9 +1117,17 @@ mod tests {
             let file = H5File::create(&path).unwrap();
             let ds = file.new_dataset::<u8>().shape([4]).create("data").unwrap();
             ds.write_raw(&[1u8, 2, 3, 4]).unwrap();
-            let a1 = ds.new_attr::<VarLenUnicode>().shape(()).create("units").unwrap();
+            let a1 = ds
+                .new_attr::<VarLenUnicode>()
+                .shape(())
+                .create("units")
+                .unwrap();
             a1.write_string("meters").unwrap();
-            let a2 = ds.new_attr::<VarLenUnicode>().shape(()).create("desc").unwrap();
+            let a2 = ds
+                .new_attr::<VarLenUnicode>()
+                .shape(())
+                .create("desc")
+                .unwrap();
             a2.write_string("test data").unwrap();
             file.close().unwrap();
         }
@@ -1213,16 +1262,46 @@ mod tests {
         {
             let file = H5File::open(&path).unwrap();
 
-            assert_eq!(file.dataset("u8").unwrap().read_raw::<u8>().unwrap(), vec![1u8, 2]);
-            assert_eq!(file.dataset("i8").unwrap().read_raw::<i8>().unwrap(), vec![-1i8, 1]);
-            assert_eq!(file.dataset("u16").unwrap().read_raw::<u16>().unwrap(), vec![100u16, 200]);
-            assert_eq!(file.dataset("i16").unwrap().read_raw::<i16>().unwrap(), vec![-100i16, 100]);
-            assert_eq!(file.dataset("u32").unwrap().read_raw::<u32>().unwrap(), vec![1000u32, 2000]);
-            assert_eq!(file.dataset("i32").unwrap().read_raw::<i32>().unwrap(), vec![-1000i32, 1000]);
-            assert_eq!(file.dataset("u64").unwrap().read_raw::<u64>().unwrap(), vec![10000u64, 20000]);
-            assert_eq!(file.dataset("i64").unwrap().read_raw::<i64>().unwrap(), vec![-10000i64, 10000]);
-            assert_eq!(file.dataset("f32").unwrap().read_raw::<f32>().unwrap(), vec![1.5f32, 2.5]);
-            assert_eq!(file.dataset("f64").unwrap().read_raw::<f64>().unwrap(), vec![1.23456f64, 7.89012]);
+            assert_eq!(
+                file.dataset("u8").unwrap().read_raw::<u8>().unwrap(),
+                vec![1u8, 2]
+            );
+            assert_eq!(
+                file.dataset("i8").unwrap().read_raw::<i8>().unwrap(),
+                vec![-1i8, 1]
+            );
+            assert_eq!(
+                file.dataset("u16").unwrap().read_raw::<u16>().unwrap(),
+                vec![100u16, 200]
+            );
+            assert_eq!(
+                file.dataset("i16").unwrap().read_raw::<i16>().unwrap(),
+                vec![-100i16, 100]
+            );
+            assert_eq!(
+                file.dataset("u32").unwrap().read_raw::<u32>().unwrap(),
+                vec![1000u32, 2000]
+            );
+            assert_eq!(
+                file.dataset("i32").unwrap().read_raw::<i32>().unwrap(),
+                vec![-1000i32, 1000]
+            );
+            assert_eq!(
+                file.dataset("u64").unwrap().read_raw::<u64>().unwrap(),
+                vec![10000u64, 20000]
+            );
+            assert_eq!(
+                file.dataset("i64").unwrap().read_raw::<i64>().unwrap(),
+                vec![-10000i64, 10000]
+            );
+            assert_eq!(
+                file.dataset("f32").unwrap().read_raw::<f32>().unwrap(),
+                vec![1.5f32, 2.5]
+            );
+            assert_eq!(
+                file.dataset("f64").unwrap().read_raw::<f64>().unwrap(),
+                vec![1.23456f64, 7.89012]
+            );
         }
 
         std::fs::remove_file(&path).ok();

@@ -79,7 +79,11 @@ mod tests {
     use super::*;
     use crate::UNDEF_ADDR;
 
-    fn build_snod(entries: &[(u64, u64, u32, u64, u64)], sizeof_addr: usize, sizeof_size: usize) -> Vec<u8> {
+    fn build_snod(
+        entries: &[(u64, u64, u32, u64, u64)],
+        sizeof_addr: usize,
+        sizeof_size: usize,
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&SNOD_SIGNATURE);
         buf.push(1); // version
@@ -115,10 +119,11 @@ mod tests {
     fn decode_basic() {
         let snod = build_snod(
             &[
-                (8, 0x100, 0, UNDEF_ADDR, UNDEF_ADDR),  // dataset
-                (16, 0x200, 1, 0x300, 0x400),             // group
+                (8, 0x100, 0, UNDEF_ADDR, UNDEF_ADDR), // dataset
+                (16, 0x200, 1, 0x300, 0x400),          // group
             ],
-            8, 8,
+            8,
+            8,
         );
         let node = SymbolTableNode::decode(&snod, 8, 8).unwrap();
         assert_eq!(node.entries.len(), 2);
@@ -167,10 +172,7 @@ mod tests {
 
     #[test]
     fn decode_4byte() {
-        let snod = build_snod(
-            &[(4, 0x80, 0, UNDEF_ADDR, UNDEF_ADDR)],
-            4, 4,
-        );
+        let snod = build_snod(&[(4, 0x80, 0, UNDEF_ADDR, UNDEF_ADDR)], 4, 4);
         let node = SymbolTableNode::decode(&snod, 4, 4).unwrap();
         assert_eq!(node.entries.len(), 1);
         assert_eq!(node.entries[0].name_offset, 4);

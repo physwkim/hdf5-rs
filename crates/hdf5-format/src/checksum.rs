@@ -285,7 +285,8 @@ mod tests {
             let h = jenkins_lookup3(case, 0);
             for (i, &prev) in hashes.iter().enumerate() {
                 assert_ne!(
-                    h, prev,
+                    h,
+                    prev,
                     "unexpected collision between input #{} and #{}: 0x{:08x}",
                     hashes.len(),
                     i,
@@ -308,16 +309,8 @@ mod tests {
         //   etc.
 
         // "Hello" (5 bytes)
-        assert_eq!(
-            jenkins_lookup3(b"Hello", 0),
-            0xc7bc405b,
-            "Hello initval=0"
-        );
-        assert_eq!(
-            jenkins_lookup3(b"Hello", 1),
-            0xdc096650,
-            "Hello initval=1"
-        );
+        assert_eq!(jenkins_lookup3(b"Hello", 0), 0xc7bc405b, "Hello initval=0");
+        assert_eq!(jenkins_lookup3(b"Hello", 1), 0xdc096650, "Hello initval=1");
 
         // "Four score and seven years" (26 bytes -- exercises the main loop + tail)
         assert_eq!(

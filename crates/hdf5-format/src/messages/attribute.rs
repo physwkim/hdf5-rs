@@ -125,7 +125,10 @@ impl AttributeMessage {
     /// - v3: 9-byte header (adds charset byte), no alignment padding
     pub fn decode(buf: &[u8], ctx: &FormatContext) -> FormatResult<(Self, usize)> {
         if buf.len() < 8 {
-            return Err(FormatError::BufferTooShort { needed: 8, available: buf.len() });
+            return Err(FormatError::BufferTooShort {
+                needed: 8,
+                available: buf.len(),
+            });
         }
 
         let version = buf[0];
@@ -166,7 +169,9 @@ impl AttributeMessage {
         let name = String::from_utf8_lossy(&buf[pos..name_end]).to_string();
         pos += name_size;
         // v1 alignment
-        if align > 1 { pos = (pos + align - 1) & !(align - 1); }
+        if align > 1 {
+            pos = (pos + align - 1) & !(align - 1);
+        }
 
         // Datatype
         let needed = pos + datatype_size;
@@ -178,7 +183,9 @@ impl AttributeMessage {
         }
         let (datatype, _) = DatatypeMessage::decode(&buf[pos..pos + datatype_size], ctx)?;
         pos += datatype_size;
-        if align > 1 { pos = (pos + align - 1) & !(align - 1); }
+        if align > 1 {
+            pos = (pos + align - 1) & !(align - 1);
+        }
 
         // Dataspace
         let needed = pos + dataspace_size;
@@ -190,7 +197,9 @@ impl AttributeMessage {
         }
         let (dataspace, _) = DataspaceMessage::decode(&buf[pos..pos + dataspace_size], ctx)?;
         pos += dataspace_size;
-        if align > 1 { pos = (pos + align - 1) & !(align - 1); }
+        if align > 1 {
+            pos = (pos + align - 1) & !(align - 1);
+        }
 
         // Data: remaining bytes = datatype.element_size() * number_of_elements
         let num_elements: u64 = if dataspace.dims.is_empty() {

@@ -58,7 +58,11 @@ impl FixedArrayHeader {
     ///
     /// `chunk_size_len` is the number of bytes needed to encode the chunk size
     /// (typically computed from the maximum possible compressed chunk size).
-    pub fn new_for_filtered_chunks(ctx: &FormatContext, num_elmts: u64, chunk_size_len: u8) -> Self {
+    pub fn new_for_filtered_chunks(
+        ctx: &FormatContext,
+        num_elmts: u64,
+        chunk_size_len: u8,
+    ) -> Self {
         // element_size = sizeof_addr + chunk_size_len + 4 (filter_mask)
         let element_size = ctx.sizeof_addr + chunk_size_len + 4;
         Self {
@@ -127,7 +131,10 @@ impl FixedArrayHeader {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -231,10 +238,10 @@ impl FixedArrayDataBlock {
     pub fn encoded_size_filtered(&self, ctx: &FormatContext, chunk_size_len: usize) -> usize {
         let sa = ctx.sizeof_addr as usize;
         let elem_size = sa + chunk_size_len + 4; // addr + chunk_size + filter_mask
-        // signature(4) + version(1) + client_id(1)
-        // + header_addr(sa)
-        // + elements(n * elem_size)
-        // + checksum(4)
+                                                 // signature(4) + version(1) + client_id(1)
+                                                 // + header_addr(sa)
+                                                 // + elements(n * elem_size)
+                                                 // + checksum(4)
         4 + 1 + 1 + sa + self.filtered_elements.len() * elem_size + 4
     }
 
@@ -285,7 +292,11 @@ impl FixedArrayDataBlock {
     }
 
     /// Decode for unfiltered chunks.
-    pub fn decode_unfiltered(buf: &[u8], ctx: &FormatContext, num_elmts: usize) -> FormatResult<Self> {
+    pub fn decode_unfiltered(
+        buf: &[u8],
+        ctx: &FormatContext,
+        num_elmts: usize,
+    ) -> FormatResult<Self> {
         let sa = ctx.sizeof_addr as usize;
         let min_size = 4 + 1 + 1 + sa + num_elmts * sa + 4;
 
@@ -308,7 +319,10 @@ impl FixedArrayDataBlock {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -367,7 +381,10 @@ impl FixedArrayDataBlock {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -388,9 +405,8 @@ impl FixedArrayDataBlock {
             pos += sa;
             let chunk_size = read_size(&buf[pos..], chunk_size_len) as u32;
             pos += chunk_size_len;
-            let filter_mask = u32::from_le_bytes([
-                buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3],
-            ]);
+            let filter_mask =
+                u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
             pos += 4;
             filtered_elements.push(FixedArrayFilteredChunkElement {
                 address,
@@ -433,11 +449,17 @@ mod tests {
     use super::*;
 
     fn ctx8() -> FormatContext {
-        FormatContext { sizeof_addr: 8, sizeof_size: 8 }
+        FormatContext {
+            sizeof_addr: 8,
+            sizeof_size: 8,
+        }
     }
 
     fn ctx4() -> FormatContext {
-        FormatContext { sizeof_addr: 4, sizeof_size: 4 }
+        FormatContext {
+            sizeof_addr: 4,
+            sizeof_size: 4,
+        }
     }
 
     #[test]
@@ -535,9 +557,13 @@ mod tests {
 
         let chunk_size_len = 4; // 4 bytes for chunk_size
         let encoded = dblk.encode_filtered(&ctx8(), chunk_size_len);
-        assert_eq!(encoded.len(), dblk.encoded_size_filtered(&ctx8(), chunk_size_len));
+        assert_eq!(
+            encoded.len(),
+            dblk.encoded_size_filtered(&ctx8(), chunk_size_len)
+        );
 
-        let decoded = FixedArrayDataBlock::decode_filtered(&encoded, &ctx8(), 2, chunk_size_len).unwrap();
+        let decoded =
+            FixedArrayDataBlock::decode_filtered(&encoded, &ctx8(), 2, chunk_size_len).unwrap();
         assert_eq!(decoded.filtered_elements, dblk.filtered_elements);
     }
 

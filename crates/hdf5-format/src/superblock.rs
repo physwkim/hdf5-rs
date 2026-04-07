@@ -452,9 +452,8 @@ impl SuperblockV0V1 {
                 available: buf.len(),
             });
         }
-        let file_consistency_flags = u32::from_le_bytes([
-            buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3],
-        ]);
+        let file_consistency_flags =
+            u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
         pos += 4;
 
         let indexed_storage_k = if version == 1 {
@@ -524,9 +523,7 @@ pub fn decode_symbol_table_entry(
 
     let name_offset = decode_offset(buf, pos, sizeof_size);
     let obj_header_addr = decode_offset(buf, pos, sizeof_addr);
-    let cache_type = u32::from_le_bytes([
-        buf[*pos], buf[*pos + 1], buf[*pos + 2], buf[*pos + 3],
-    ]);
+    let cache_type = u32::from_le_bytes([buf[*pos], buf[*pos + 1], buf[*pos + 2], buf[*pos + 3]]);
     *pos += 4;
     // reserved u32
     *pos += 4;
@@ -663,7 +660,10 @@ mod tests_v0v1 {
         let mut buf = Vec::new();
         buf.extend_from_slice(&HDF5_SIGNATURE);
         buf.push(1); // version 1
-        buf.push(0); buf.push(0); buf.push(0); buf.push(0);
+        buf.push(0);
+        buf.push(0);
+        buf.push(0);
+        buf.push(0);
         buf.push(sizeof_addr as u8);
         buf.push(sizeof_size as u8);
         buf.push(0);

@@ -328,9 +328,9 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
                 encoder.write_all(data).map_err(|e| {
                     FormatError::InvalidData(format!("deflate compress error: {}", e))
                 })?;
-                encoder.finish().map_err(|e| {
-                    FormatError::InvalidData(format!("deflate finish error: {}", e))
-                })
+                encoder
+                    .finish()
+                    .map_err(|e| FormatError::InvalidData(format!("deflate finish error: {}", e)))
             } else {
                 use flate2::read::ZlibDecoder;
                 use std::io::Read;
@@ -344,11 +344,9 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             }
         }
         #[cfg(not(feature = "deflate"))]
-        FILTER_DEFLATE => {
-            Err(FormatError::UnsupportedFeature(
-                "deflate filter requires the 'deflate' feature".into(),
-            ))
-        }
+        FILTER_DEFLATE => Err(FormatError::UnsupportedFeature(
+            "deflate filter requires the 'deflate' feature".into(),
+        )),
         FILTER_SHUFFLE => {
             // cd_values[0] = bytesoftype (element size)
             let bytesoftype = filter.cd_values.first().copied().unwrap_or(1) as usize;
@@ -375,11 +373,9 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
                 Ok(data[..data.len() - 4].to_vec())
             }
         }
-        FILTER_SZIP => {
-            Err(FormatError::UnsupportedFeature(
-                "SZIP filter requires external libsz library (not bundled)".into(),
-            ))
-        }
+        FILTER_SZIP => Err(FormatError::UnsupportedFeature(
+            "SZIP filter requires external libsz library (not bundled)".into(),
+        )),
         // =====================================================================
         // LZ4 (32004) — C-compatible block framing: 8-byte BE orig_size +
         // 4-byte BE block_size, then per-block: 4-byte BE compressed_size + data
@@ -390,7 +386,11 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
                 let orig_size = data.len() as u64;
                 let block_size = filter.cd_values.first().copied().unwrap_or(1 << 30) as usize;
                 let block_size = std::cmp::min(block_size, data.len());
-                let block_size = if block_size == 0 { data.len() } else { block_size };
+                let block_size = if block_size == 0 {
+                    data.len()
+                } else {
+                    block_size
+                };
 
                 let mut out = Vec::with_capacity(12 + data.len());
                 out.extend_from_slice(&orig_size.to_be_bytes());
@@ -419,18 +419,28 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
                 let orig_size = u64::from_be_bytes([
                     data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
                 ]) as usize;
-                let mut block_size = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
-                if block_size > orig_size { block_size = orig_size; }
+                let mut block_size =
+                    u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+                if block_size > orig_size {
+                    block_size = orig_size;
+                }
 
                 let mut output = Vec::with_capacity(orig_size);
                 let mut rpos = 12;
                 while output.len() < orig_size {
-                    if rpos + 4 > data.len() { break; }
+                    if rpos + 4 > data.len() {
+                        break;
+                    }
                     let comp_size = u32::from_be_bytes([
-                        data[rpos], data[rpos+1], data[rpos+2], data[rpos+3],
+                        data[rpos],
+                        data[rpos + 1],
+                        data[rpos + 2],
+                        data[rpos + 3],
                     ]) as usize;
                     rpos += 4;
-                    if rpos + comp_size > data.len() { break; }
+                    if rpos + comp_size > data.len() {
+                        break;
+                    }
 
                     let remaining = orig_size - output.len();
                     let cur_block = std::cmp::min(block_size, remaining);
@@ -439,8 +449,11 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
                         // Uncompressed block
                         output.extend_from_slice(&data[rpos..rpos + comp_size]);
                     } else {
-                        let decompressed = lz4_flex::decompress(&data[rpos..rpos + comp_size], cur_block)
-                            .map_err(|e| FormatError::InvalidData(format!("LZ4 decompress: {}", e)))?;
+                        let decompressed =
+                            lz4_flex::decompress(&data[rpos..rpos + comp_size], cur_block)
+                                .map_err(|e| {
+                                    FormatError::InvalidData(format!("LZ4 decompress: {}", e))
+                                })?;
                         output.extend_from_slice(&decompressed);
                     }
                     rpos += comp_size;
@@ -449,9 +462,9 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             }
         }
         #[cfg(not(feature = "lz4"))]
-        FILTER_LZ4 => {
-            Err(FormatError::UnsupportedFeature("LZ4 filter requires the 'lz4' feature".into()))
-        }
+        FILTER_LZ4 => Err(FormatError::UnsupportedFeature(
+            "LZ4 filter requires the 'lz4' feature".into(),
+        )),
 
         // =====================================================================
         // ZSTD (32015) — pure Rust compressor + decompressor, zero C deps
@@ -467,9 +480,9 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             }
         }
         #[cfg(not(feature = "zstandard"))]
-        FILTER_ZSTD => {
-            Err(FormatError::UnsupportedFeature("ZSTD requires 'zstandard' feature".into()))
-        }
+        FILTER_ZSTD => Err(FormatError::UnsupportedFeature(
+            "ZSTD requires 'zstandard' feature".into(),
+        )),
 
         // =====================================================================
         // BZIP2 (307) — raw bzip2 stream
@@ -482,21 +495,24 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
                 use std::io::Write;
                 let level = filter.cd_values.first().copied().unwrap_or(9);
                 let mut enc = BzEncoder::new(Vec::new(), Compression::new(level));
-                enc.write_all(data).map_err(|e| FormatError::InvalidData(format!("bzip2 compress: {}", e)))?;
-                enc.finish().map_err(|e| FormatError::InvalidData(format!("bzip2 finish: {}", e)))
+                enc.write_all(data)
+                    .map_err(|e| FormatError::InvalidData(format!("bzip2 compress: {}", e)))?;
+                enc.finish()
+                    .map_err(|e| FormatError::InvalidData(format!("bzip2 finish: {}", e)))
             } else {
                 use bzip2::read::BzDecoder;
                 use std::io::Read;
                 let mut dec = BzDecoder::new(data);
                 let mut out = Vec::new();
-                dec.read_to_end(&mut out).map_err(|e| FormatError::InvalidData(format!("bzip2 decompress: {}", e)))?;
+                dec.read_to_end(&mut out)
+                    .map_err(|e| FormatError::InvalidData(format!("bzip2 decompress: {}", e)))?;
                 Ok(out)
             }
         }
         #[cfg(not(feature = "bzip2_filter"))]
-        FILTER_BZIP2 => {
-            Err(FormatError::UnsupportedFeature("BZIP2 requires 'bzip2_filter' feature".into()))
-        }
+        FILTER_BZIP2 => Err(FormatError::UnsupportedFeature(
+            "BZIP2 requires 'bzip2_filter' feature".into(),
+        )),
 
         // =====================================================================
         // LZF (32000) — raw lzf stream, no framing. Pure Rust implementation.
@@ -506,7 +522,11 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             if compress {
                 Ok(lzf_compress(data))
             } else {
-                let out_size = if chunk_size > 0 { chunk_size } else { data.len() * 4 };
+                let out_size = if chunk_size > 0 {
+                    chunk_size
+                } else {
+                    data.len() * 4
+                };
                 lzf_decompress(data, out_size)
             }
         }
@@ -559,9 +579,9 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             }
         }
         #[cfg(not(feature = "blosc"))]
-        FILTER_BLOSC => {
-            Err(FormatError::UnsupportedFeature("BLOSC requires 'blosc' feature".into()))
-        }
+        FILTER_BLOSC => Err(FormatError::UnsupportedFeature(
+            "BLOSC requires 'blosc' feature".into(),
+        )),
 
         other => Err(FormatError::UnsupportedFeature(format!(
             "filter id {}",
@@ -652,8 +672,13 @@ fn lzf_compress(input: &[u8]) -> Vec<u8> {
         let r = htab[h as usize] as usize;
         htab[h as usize] = ip as u32;
 
-        if r > 0 && ip - r < (1 << 13) && r + 2 < len && ip + 2 < len
-            && input[r] == input[ip] && input[r+1] == input[ip+1] && input[r+2] == input[ip+2]
+        if r > 0
+            && ip - r < (1 << 13)
+            && r + 2 < len
+            && ip + 2 < len
+            && input[r] == input[ip]
+            && input[r + 1] == input[ip + 1]
+            && input[r + 2] == input[ip + 2]
         {
             if lit > 0 {
                 out[lit_start] = (lit - 1) as u8;
@@ -664,7 +689,9 @@ fn lzf_compress(input: &[u8]) -> Vec<u8> {
 
             let mut ml = 3;
             let max_len = std::cmp::min(len - ip, std::cmp::min(len - r, 264));
-            while ml < max_len && input[r + ml] == input[ip + ml] { ml += 1; }
+            while ml < max_len && input[r + ml] == input[ip + ml] {
+                ml += 1;
+            }
 
             let off = ip - r - 1;
             if ml <= 8 {
@@ -713,7 +740,9 @@ fn lzf_decompress(input: &[u8], max_output: usize) -> FormatResult<Vec<u8>> {
             // Literal run: ctrl+1 bytes
             let count = ctrl + 1;
             if ip + count > input.len() {
-                return Err(FormatError::InvalidData("LZF: truncated literal run".into()));
+                return Err(FormatError::InvalidData(
+                    "LZF: truncated literal run".into(),
+                ));
             }
             out.extend_from_slice(&input[ip..ip + count]);
             ip += count;
@@ -738,7 +767,9 @@ fn lzf_decompress(input: &[u8], max_output: usize) -> FormatResult<Vec<u8>> {
             ip += 1;
 
             if out.len() < off + 1 {
-                return Err(FormatError::InvalidData("LZF: invalid back-ref offset".into()));
+                return Err(FormatError::InvalidData(
+                    "LZF: invalid back-ref offset".into(),
+                ));
             }
             let ref_start = out.len() - off - 1;
             for i in 0..ml {
@@ -792,14 +823,24 @@ fn bitunshuffle_block(input: &[u8], elem_size: usize) -> Vec<u8> {
     out
 }
 
-fn bitshuffle_compress(data: &[u8], elem_size: usize, mut block_size: usize, comp_type: u32, _filter: &Filter) -> FormatResult<Vec<u8>> {
-    if elem_size == 0 { return Ok(data.to_vec()); }
+fn bitshuffle_compress(
+    data: &[u8],
+    elem_size: usize,
+    mut block_size: usize,
+    comp_type: u32,
+    _filter: &Filter,
+) -> FormatResult<Vec<u8>> {
+    if elem_size == 0 {
+        return Ok(data.to_vec());
+    }
     let n_elems = data.len() / elem_size;
     if block_size == 0 {
         block_size = std::cmp::max(128, 8192 / elem_size);
     }
     block_size = (block_size / 8) * 8; // round down to multiple of 8
-    if block_size < 8 { block_size = 8; }
+    if block_size < 8 {
+        block_size = 8;
+    }
 
     if comp_type == 0 {
         // Bitshuffle only, no compression, no header
@@ -850,11 +891,15 @@ fn bitshuffle_compress(data: &[u8], elem_size: usize, mut block_size: usize, com
 fn bitshuffle_decompress(data: &[u8], elem_size: usize, comp_type: u32) -> FormatResult<Vec<u8>> {
     if comp_type == 0 {
         // No compression header — bitunshuffle block-by-block (matching compress)
-        if elem_size == 0 { return Ok(data.to_vec()); }
+        if elem_size == 0 {
+            return Ok(data.to_vec());
+        }
         let n_elems = data.len() / elem_size;
         let mut block_size = std::cmp::max(128, 8192 / elem_size);
         block_size = (block_size / 8) * 8;
-        if block_size < 8 { block_size = 8; }
+        if block_size < 8 {
+            block_size = 8;
+        }
         let usable = (n_elems / block_size) * block_size;
         let mut out = Vec::with_capacity(data.len());
         let mut pos = 0;
@@ -868,11 +913,19 @@ fn bitshuffle_decompress(data: &[u8], elem_size: usize, comp_type: u32) -> Forma
     }
 
     if data.len() < 12 {
-        return Err(FormatError::InvalidData("bitshuffle: header too short".into()));
+        return Err(FormatError::InvalidData(
+            "bitshuffle: header too short".into(),
+        ));
     }
-    let orig_size = u64::from_be_bytes([data[0],data[1],data[2],data[3],data[4],data[5],data[6],data[7]]) as usize;
-    let block_bytes = u32::from_be_bytes([data[8],data[9],data[10],data[11]]) as usize;
-    let block_elems = if elem_size > 0 { block_bytes / elem_size } else { 0 };
+    let orig_size = u64::from_be_bytes([
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+    ]) as usize;
+    let block_bytes = u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+    let block_elems = if elem_size > 0 {
+        block_bytes / elem_size
+    } else {
+        0
+    };
 
     let mut output = Vec::with_capacity(orig_size);
     let mut rpos = 12;
@@ -882,17 +935,23 @@ fn bitshuffle_decompress(data: &[u8], elem_size: usize, comp_type: u32) -> Forma
     let mut elems_done = 0;
 
     while elems_done < usable {
-        if rpos + 4 > data.len() { break; }
-        let comp_size = u32::from_be_bytes([data[rpos],data[rpos+1],data[rpos+2],data[rpos+3]]) as usize;
+        if rpos + 4 > data.len() {
+            break;
+        }
+        let comp_size =
+            u32::from_be_bytes([data[rpos], data[rpos + 1], data[rpos + 2], data[rpos + 3]])
+                as usize;
         rpos += 4;
-        if rpos + comp_size > data.len() { break; }
+        if rpos + comp_size > data.len() {
+            break;
+        }
 
         let cur_elems = std::cmp::min(block_elems, usable - elems_done);
         let _exp_size = cur_elems * elem_size;
 
         #[cfg(feature = "lz4")]
         if comp_size < _exp_size {
-            let decompressed = lz4_flex::decompress(&data[rpos..rpos+comp_size], _exp_size)
+            let decompressed = lz4_flex::decompress(&data[rpos..rpos + comp_size], _exp_size)
                 .map_err(|e| FormatError::InvalidData(format!("bshuf LZ4: {}", e)))?;
             output.extend_from_slice(&bitunshuffle_block(&decompressed, elem_size));
             rpos += comp_size;
@@ -901,7 +960,10 @@ fn bitshuffle_decompress(data: &[u8], elem_size: usize, comp_type: u32) -> Forma
         }
 
         // Uncompressed or no LZ4 available
-        output.extend_from_slice(&bitunshuffle_block(&data[rpos..rpos+comp_size], elem_size));
+        output.extend_from_slice(&bitunshuffle_block(
+            &data[rpos..rpos + comp_size],
+            elem_size,
+        ));
         rpos += comp_size;
         elems_done += cur_elems;
     }
@@ -909,7 +971,7 @@ fn bitshuffle_decompress(data: &[u8], elem_size: usize, comp_type: u32) -> Forma
     // Leftover raw bytes
     if rpos < data.len() && output.len() < orig_size {
         let remaining = std::cmp::min(data.len() - rpos, orig_size - output.len());
-        output.extend_from_slice(&data[rpos..rpos+remaining]);
+        output.extend_from_slice(&data[rpos..rpos + remaining]);
     }
     Ok(output)
 }
@@ -932,7 +994,9 @@ fn bitgroom_quantize(data: &[u8], filter: &Filter) -> FormatResult<Vec<u8>> {
 
     if datum_size == 4 {
         let bit_xpl_nbr_sgn: usize = 23;
-        if prc_bnr_xpl_rqr >= bit_xpl_nbr_sgn { return Ok(out); }
+        if prc_bnr_xpl_rqr >= bit_xpl_nbr_sgn {
+            return Ok(out);
+        }
         let bit_xpl_nbr_zro = bit_xpl_nbr_sgn - prc_bnr_xpl_rqr;
         let msk_zro: u32 = 0xFFFF_FFFFu32 << bit_xpl_nbr_zro;
         let msk_one: u32 = !msk_zro;
@@ -940,19 +1004,25 @@ fn bitgroom_quantize(data: &[u8], filter: &Filter) -> FormatResult<Vec<u8>> {
         let n = out.len() / 4;
         for i in 0..n {
             let off = i * 4;
-            let mut val = u32::from_le_bytes([out[off], out[off+1], out[off+2], out[off+3]]);
-            if has_mss && val == mss_val_u32 { continue; }
-            if val == 0 { continue; } // skip zero
+            let mut val = u32::from_le_bytes([out[off], out[off + 1], out[off + 2], out[off + 3]]);
+            if has_mss && val == mss_val_u32 {
+                continue;
+            }
+            if val == 0 {
+                continue;
+            } // skip zero
             if i % 2 == 0 {
                 val &= msk_zro; // shave
             } else {
                 val |= msk_one; // set
             }
-            out[off..off+4].copy_from_slice(&val.to_le_bytes());
+            out[off..off + 4].copy_from_slice(&val.to_le_bytes());
         }
     } else if datum_size == 8 {
         let bit_xpl_nbr_sgn: usize = 52;
-        if prc_bnr_xpl_rqr >= bit_xpl_nbr_sgn { return Ok(out); }
+        if prc_bnr_xpl_rqr >= bit_xpl_nbr_sgn {
+            return Ok(out);
+        }
         let bit_xpl_nbr_zro = bit_xpl_nbr_sgn - prc_bnr_xpl_rqr;
         let msk_zro: u64 = 0xFFFF_FFFF_FFFF_FFFFu64 << bit_xpl_nbr_zro;
         let msk_one: u64 = !msk_zro;
@@ -960,10 +1030,25 @@ fn bitgroom_quantize(data: &[u8], filter: &Filter) -> FormatResult<Vec<u8>> {
         let n = out.len() / 8;
         for i in 0..n {
             let off = i * 8;
-            let mut val = u64::from_le_bytes([out[off],out[off+1],out[off+2],out[off+3],out[off+4],out[off+5],out[off+6],out[off+7]]);
-            if val == 0 { continue; }
-            if i % 2 == 0 { val &= msk_zro; } else { val |= msk_one; }
-            out[off..off+8].copy_from_slice(&val.to_le_bytes());
+            let mut val = u64::from_le_bytes([
+                out[off],
+                out[off + 1],
+                out[off + 2],
+                out[off + 3],
+                out[off + 4],
+                out[off + 5],
+                out[off + 6],
+                out[off + 7],
+            ]);
+            if val == 0 {
+                continue;
+            }
+            if i % 2 == 0 {
+                val &= msk_zro;
+            } else {
+                val |= msk_one;
+            }
+            out[off..off + 8].copy_from_slice(&val.to_le_bytes());
         }
     }
     Ok(out)
@@ -983,49 +1068,81 @@ fn bitround_quantize(data: &[u8], filter: &Filter) -> FormatResult<Vec<u8>> {
         let n = out.len() / 4;
         for i in 0..n {
             let off = i * 4;
-            let val = f32::from_le_bytes([out[off],out[off+1],out[off+2],out[off+3]]);
-            if val == 0.0 || val.is_nan() || val.is_infinite() { continue; }
+            let val = f32::from_le_bytes([out[off], out[off + 1], out[off + 2], out[off + 3]]);
+            if val == 0.0 || val.is_nan() || val.is_infinite() {
+                continue;
+            }
 
             let (mnt, xpn) = frexp_f32(val);
             let mnt_log10 = mnt.abs().log10();
-            let dgt_nbr = ((xpn as f64) * std::f64::consts::LOG10_2 + mnt_log10 as f64).floor() as i32 + 1;
+            let dgt_nbr =
+                ((xpn as f64) * std::f64::consts::LOG10_2 + mnt_log10 as f64).floor() as i32 + 1;
             let qnt_pwr = ((dgt_nbr - nsd) as f64 * std::f64::consts::LOG2_10).floor() as i32;
-            let prc_rqr = ((xpn as f64 - (std::f64::consts::LOG2_10 * mnt_log10 as f64)).floor() as i32 - qnt_pwr).unsigned_abs() as usize;
+            let prc_rqr = ((xpn as f64 - (std::f64::consts::LOG2_10 * mnt_log10 as f64)).floor()
+                as i32
+                - qnt_pwr)
+                .unsigned_abs() as usize;
             let prc_rqr = prc_rqr.saturating_sub(1);
 
-            if prc_rqr >= 23 { continue; }
+            if prc_rqr >= 23 {
+                continue;
+            }
             let zro_bits = 23 - prc_rqr;
             let msk_zro: u32 = 0xFFFF_FFFFu32 << zro_bits;
             let msk_hshv: u32 = (!msk_zro) & (msk_zro >> 1);
 
-            let mut u = u32::from_le_bytes([out[off],out[off+1],out[off+2],out[off+3]]);
+            let mut u = u32::from_le_bytes([out[off], out[off + 1], out[off + 2], out[off + 3]]);
             u = u.wrapping_add(msk_hshv);
             u &= msk_zro;
-            out[off..off+4].copy_from_slice(&u.to_le_bytes());
+            out[off..off + 4].copy_from_slice(&u.to_le_bytes());
         }
     } else if datum_size == 8 {
         let n = out.len() / 8;
         for i in 0..n {
             let off = i * 8;
-            let val = f64::from_le_bytes([out[off],out[off+1],out[off+2],out[off+3],out[off+4],out[off+5],out[off+6],out[off+7]]);
-            if val == 0.0 || val.is_nan() || val.is_infinite() { continue; }
+            let val = f64::from_le_bytes([
+                out[off],
+                out[off + 1],
+                out[off + 2],
+                out[off + 3],
+                out[off + 4],
+                out[off + 5],
+                out[off + 6],
+                out[off + 7],
+            ]);
+            if val == 0.0 || val.is_nan() || val.is_infinite() {
+                continue;
+            }
 
             let (mnt, xpn) = frexp_f64(val);
             let mnt_log10 = mnt.abs().log10();
             let dgt_nbr = ((xpn as f64) * std::f64::consts::LOG10_2 + mnt_log10).floor() as i32 + 1;
             let qnt_pwr = ((dgt_nbr - nsd) as f64 * std::f64::consts::LOG2_10).floor() as i32;
-            let prc_rqr = ((xpn as f64 - std::f64::consts::LOG2_10 * mnt_log10).floor() as i32 - qnt_pwr).unsigned_abs() as usize;
+            let prc_rqr = ((xpn as f64 - std::f64::consts::LOG2_10 * mnt_log10).floor() as i32
+                - qnt_pwr)
+                .unsigned_abs() as usize;
             let prc_rqr = prc_rqr.saturating_sub(1);
 
-            if prc_rqr >= 52 { continue; }
+            if prc_rqr >= 52 {
+                continue;
+            }
             let zro_bits = 52 - prc_rqr;
             let msk_zro: u64 = 0xFFFF_FFFF_FFFF_FFFFu64 << zro_bits;
             let msk_hshv: u64 = (!msk_zro) & (msk_zro >> 1);
 
-            let mut u = u64::from_le_bytes([out[off],out[off+1],out[off+2],out[off+3],out[off+4],out[off+5],out[off+6],out[off+7]]);
+            let mut u = u64::from_le_bytes([
+                out[off],
+                out[off + 1],
+                out[off + 2],
+                out[off + 3],
+                out[off + 4],
+                out[off + 5],
+                out[off + 6],
+                out[off + 7],
+            ]);
             u = u.wrapping_add(msk_hshv);
             u &= msk_zro;
-            out[off..off+8].copy_from_slice(&u.to_le_bytes());
+            out[off..off + 8].copy_from_slice(&u.to_le_bytes());
         }
     }
     Ok(out)
@@ -1033,7 +1150,9 @@ fn bitround_quantize(data: &[u8], filter: &Filter) -> FormatResult<Vec<u8>> {
 
 /// Pure Rust frexp for f32.
 fn frexp_f32(x: f32) -> (f32, i32) {
-    if x == 0.0 || x.is_nan() || x.is_infinite() { return (x, 0); }
+    if x == 0.0 || x.is_nan() || x.is_infinite() {
+        return (x, 0);
+    }
     let bits = x.to_bits();
     let exp = ((bits >> 23) & 0xFF) as i32 - 126;
     let mnt = f32::from_bits((bits & 0x807F_FFFF) | 0x3F00_0000);
@@ -1042,7 +1161,9 @@ fn frexp_f32(x: f32) -> (f32, i32) {
 
 /// Pure Rust frexp for f64.
 fn frexp_f64(x: f64) -> (f64, i32) {
-    if x == 0.0 || x.is_nan() || x.is_infinite() { return (x, 0); }
+    if x == 0.0 || x.is_nan() || x.is_infinite() {
+        return (x, 0);
+    }
     let bits = x.to_bits();
     let exp = ((bits >> 52) & 0x7FF) as i32 - 1022;
     let mnt = f64::from_bits((bits & 0x800F_FFFF_FFFF_FFFF) | 0x3FE0_0000_0000_0000);
@@ -1152,8 +1273,16 @@ mod tests {
     fn encode_decode_multiple_filters() {
         let pipeline = FilterPipeline {
             filters: vec![
-                Filter { id: FILTER_SHUFFLE, flags: 0, cd_values: vec![] },
-                Filter { id: FILTER_DEFLATE, flags: 0, cd_values: vec![4] },
+                Filter {
+                    id: FILTER_SHUFFLE,
+                    flags: 0,
+                    cd_values: vec![],
+                },
+                Filter {
+                    id: FILTER_DEFLATE,
+                    flags: 0,
+                    cd_values: vec![4],
+                },
             ],
         };
         let encoded = pipeline.encode();
@@ -1302,7 +1431,9 @@ mod tests {
 
     /// Golden test data: 128 f64 values [0.0, 0.5, 1.0, ..., 63.5]
     fn golden_f64_data() -> Vec<u8> {
-        (0..128u32).flat_map(|i| (i as f64 * 0.5).to_le_bytes()).collect()
+        (0..128u32)
+            .flat_map(|i| (i as f64 * 0.5).to_le_bytes())
+            .collect()
     }
 
     // --- LZF roundtrip ---
@@ -1310,7 +1441,11 @@ mod tests {
     fn lzf_roundtrip() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_LZF, flags: 0, cd_values: vec![4, 0, data.len() as u32] }],
+            filters: vec![Filter {
+                id: FILTER_LZF,
+                flags: 0,
+                cd_values: vec![4, 0, data.len() as u32],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         let decompressed = reverse_filters(&pipeline, &compressed).unwrap();
@@ -1345,7 +1480,11 @@ mod tests {
     fn bitshuffle_no_compression_roundtrip() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_BSHUF, flags: 0, cd_values: vec![0, 0, 4, 0, 0] }],
+            filters: vec![Filter {
+                id: FILTER_BSHUF,
+                flags: 0,
+                cd_values: vec![0, 0, 4, 0, 0],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         let decompressed = reverse_filters(&pipeline, &compressed).unwrap();
@@ -1357,7 +1496,11 @@ mod tests {
     fn bitshuffle_lz4_roundtrip() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_BSHUF, flags: 0, cd_values: vec![0, 0, 4, 0, 2] }],
+            filters: vec![Filter {
+                id: FILTER_BSHUF,
+                flags: 0,
+                cd_values: vec![0, 0, 4, 0, 2],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         // Bitshuffle+LZ4 produces valid output (may not always be smaller)
@@ -1370,18 +1513,40 @@ mod tests {
     fn bitgroom_golden_f32() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_BITGROOM, flags: 0, cd_values: vec![3, 4, 0, 0, 0] }],
+            filters: vec![Filter {
+                id: FILTER_BITGROOM,
+                flags: 0,
+                cd_values: vec![3, 4, 0, 0, 0],
+            }],
         };
         let quantized = apply_filters(&pipeline, &data).unwrap();
         assert_eq!(quantized.len(), data.len()); // same size
 
         // Verify values are close to originals (within NSD=3 precision)
         for i in 0..256 {
-            let orig = f32::from_le_bytes([data[i*4], data[i*4+1], data[i*4+2], data[i*4+3]]);
-            let quant = f32::from_le_bytes([quantized[i*4], quantized[i*4+1], quantized[i*4+2], quantized[i*4+3]]);
-            if orig == 0.0 { continue; }
+            let orig = f32::from_le_bytes([
+                data[i * 4],
+                data[i * 4 + 1],
+                data[i * 4 + 2],
+                data[i * 4 + 3],
+            ]);
+            let quant = f32::from_le_bytes([
+                quantized[i * 4],
+                quantized[i * 4 + 1],
+                quantized[i * 4 + 2],
+                quantized[i * 4 + 3],
+            ]);
+            if orig == 0.0 {
+                continue;
+            }
             let rel_err = ((quant - orig) / orig).abs();
-            assert!(rel_err < 0.01, "value {} quantized to {}, rel_err={}", orig, quant, rel_err);
+            assert!(
+                rel_err < 0.01,
+                "value {} quantized to {}, rel_err={}",
+                orig,
+                quant,
+                rel_err
+            );
         }
 
         // Decompress is no-op
@@ -1394,23 +1559,47 @@ mod tests {
     fn bitround_golden_f64() {
         let data = golden_f64_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_BITROUND, flags: 0, cd_values: vec![4, 8, 0, 0, 0] }],
+            filters: vec![Filter {
+                id: FILTER_BITROUND,
+                flags: 0,
+                cd_values: vec![4, 8, 0, 0, 0],
+            }],
         };
         let quantized = apply_filters(&pipeline, &data).unwrap();
         assert_eq!(quantized.len(), data.len());
 
         for i in 0..128 {
             let orig = f64::from_le_bytes([
-                data[i*8], data[i*8+1], data[i*8+2], data[i*8+3],
-                data[i*8+4], data[i*8+5], data[i*8+6], data[i*8+7],
+                data[i * 8],
+                data[i * 8 + 1],
+                data[i * 8 + 2],
+                data[i * 8 + 3],
+                data[i * 8 + 4],
+                data[i * 8 + 5],
+                data[i * 8 + 6],
+                data[i * 8 + 7],
             ]);
             let quant = f64::from_le_bytes([
-                quantized[i*8], quantized[i*8+1], quantized[i*8+2], quantized[i*8+3],
-                quantized[i*8+4], quantized[i*8+5], quantized[i*8+6], quantized[i*8+7],
+                quantized[i * 8],
+                quantized[i * 8 + 1],
+                quantized[i * 8 + 2],
+                quantized[i * 8 + 3],
+                quantized[i * 8 + 4],
+                quantized[i * 8 + 5],
+                quantized[i * 8 + 6],
+                quantized[i * 8 + 7],
             ]);
-            if orig == 0.0 { continue; }
+            if orig == 0.0 {
+                continue;
+            }
             let rel_err = ((quant - orig) / orig).abs();
-            assert!(rel_err < 0.001, "f64 {} quantized to {}, rel_err={}", orig, quant, rel_err);
+            assert!(
+                rel_err < 0.001,
+                "f64 {} quantized to {}, rel_err={}",
+                orig,
+                quant,
+                rel_err
+            );
         }
     }
 
@@ -1420,14 +1609,24 @@ mod tests {
     fn lz4_c_framing_roundtrip() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_LZ4, flags: 0, cd_values: vec![1 << 20] }],
+            filters: vec![Filter {
+                id: FILTER_LZ4,
+                flags: 0,
+                cd_values: vec![1 << 20],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         // Verify C-compatible header: 8-byte BE orig_size + 4-byte BE block_size
         assert!(compressed.len() >= 12);
         let orig_from_header = u64::from_be_bytes([
-            compressed[0], compressed[1], compressed[2], compressed[3],
-            compressed[4], compressed[5], compressed[6], compressed[7],
+            compressed[0],
+            compressed[1],
+            compressed[2],
+            compressed[3],
+            compressed[4],
+            compressed[5],
+            compressed[6],
+            compressed[7],
         ]);
         assert_eq!(orig_from_header, data.len() as u64);
 
@@ -1441,7 +1640,11 @@ mod tests {
         let data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
         // Small block size to force multiple blocks
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_LZ4, flags: 0, cd_values: vec![1024] }],
+            filters: vec![Filter {
+                id: FILTER_LZ4,
+                flags: 0,
+                cd_values: vec![1024],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         let decompressed = reverse_filters(&pipeline, &compressed).unwrap();
@@ -1454,7 +1657,11 @@ mod tests {
     fn bzip2_roundtrip() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_BZIP2, flags: 0, cd_values: vec![9] }],
+            filters: vec![Filter {
+                id: FILTER_BZIP2,
+                flags: 0,
+                cd_values: vec![9],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         assert!(compressed.len() < data.len());
@@ -1468,13 +1675,18 @@ mod tests {
     fn blosc_roundtrip() {
         let data = golden_f32_data();
         let pipeline = FilterPipeline {
-            filters: vec![Filter { id: FILTER_BLOSC, flags: 0, cd_values: vec![2, 2, 4, data.len() as u32, 5, 1, 1] }],
+            filters: vec![Filter {
+                id: FILTER_BLOSC,
+                flags: 0,
+                cd_values: vec![2, 2, 4, data.len() as u32, 5, 1, 1],
+            }],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
         // Verify blosc header
         assert!(compressed.len() >= 16);
         assert_eq!(compressed[0], 2); // format version
-        let nbytes = u32::from_le_bytes([compressed[4], compressed[5], compressed[6], compressed[7]]);
+        let nbytes =
+            u32::from_le_bytes([compressed[4], compressed[5], compressed[6], compressed[7]]);
         assert_eq!(nbytes as usize, data.len());
 
         let decompressed = reverse_filters(&pipeline, &compressed).unwrap();
@@ -1488,8 +1700,16 @@ mod tests {
         let data = golden_f64_data();
         let pipeline = FilterPipeline {
             filters: vec![
-                Filter { id: FILTER_SHUFFLE, flags: 0, cd_values: vec![8] },
-                Filter { id: FILTER_BZIP2, flags: 0, cd_values: vec![9] },
+                Filter {
+                    id: FILTER_SHUFFLE,
+                    flags: 0,
+                    cd_values: vec![8],
+                },
+                Filter {
+                    id: FILTER_BZIP2,
+                    flags: 0,
+                    cd_values: vec![9],
+                },
             ],
         };
         let compressed = apply_filters(&pipeline, &data).unwrap();
@@ -1510,7 +1730,11 @@ mod tests {
             (FILTER_BZIP2, vec![9]),
         ] {
             let pipeline = FilterPipeline {
-                filters: vec![Filter { id, flags: 0, cd_values: cd.to_vec() }],
+                filters: vec![Filter {
+                    id,
+                    flags: 0,
+                    cd_values: cd.to_vec(),
+                }],
             };
             let encoded = pipeline.encode();
             let (decoded, _) = FilterPipeline::decode(&encoded).unwrap();

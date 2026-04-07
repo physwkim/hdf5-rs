@@ -2,8 +2,16 @@
 fn compression_ratios_by_level() {
     let patterns: Vec<(&str, Vec<u8>)> = vec![
         ("zeros_64K", vec![0u8; 65536]),
-        ("text_50K", b"The quick brown fox jumps over the lazy dog. ".repeat(1100)),
-        ("seq_f64_32K", (0..4096u64).flat_map(|i| (i as f64 * 0.5).to_le_bytes()).collect()),
+        (
+            "text_50K",
+            b"The quick brown fox jumps over the lazy dog. ".repeat(1100),
+        ),
+        (
+            "seq_f64_32K",
+            (0..4096u64)
+                .flat_map(|i| (i as f64 * 0.5).to_le_bytes())
+                .collect(),
+        ),
     ];
 
     for (name, data) in &patterns {
@@ -15,7 +23,13 @@ fn compression_ratios_by_level() {
             assert_eq!(decompressed.len(), data.len(), "{} level {}", name, level);
             assert_eq!(&decompressed, data, "{} level {}", name, level);
             let ratio = data.len() as f64 / compressed.len() as f64;
-            eprintln!("  level {:2}: {:>8} -> {:>8}  ({:.2}x)", level, data.len(), compressed.len(), ratio);
+            eprintln!(
+                "  level {:2}: {:>8} -> {:>8}  ({:.2}x)",
+                level,
+                data.len(),
+                compressed.len(),
+                ratio
+            );
         }
     }
 }

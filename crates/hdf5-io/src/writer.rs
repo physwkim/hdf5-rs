@@ -5,31 +5,29 @@
 
 use std::path::Path;
 
-use hdf5_format::superblock::*;
-use hdf5_format::object_header::ObjectHeader;
-use hdf5_format::messages::*;
+use hdf5_format::chunk_index::btree_v2::Bt2ChunkIndex;
+use hdf5_format::chunk_index::extensible_array::{
+    compute_chunk_size_len, compute_ndblk_addrs, compute_nsblk_addrs, ExtensibleArrayDataBlock,
+    ExtensibleArrayHeader, ExtensibleArrayIndexBlock, FilteredChunkEntry, FilteredDataBlock,
+    FilteredIndexBlock,
+};
+use hdf5_format::chunk_index::fixed_array::{FixedArrayDataBlock, FixedArrayHeader};
+use hdf5_format::messages::attribute::AttributeMessage;
+use hdf5_format::messages::data_layout::{DataLayoutMessage, EarrayParams, FixedArrayParams};
 use hdf5_format::messages::dataspace::DataspaceMessage;
 use hdf5_format::messages::datatype::DatatypeMessage;
 use hdf5_format::messages::fill_value::FillValueMessage;
+use hdf5_format::messages::filter::{self, FilterPipeline};
+use hdf5_format::messages::group_info::GroupInfoMessage;
 use hdf5_format::messages::link::LinkMessage;
 use hdf5_format::messages::link_info::LinkInfoMessage;
-use hdf5_format::messages::group_info::GroupInfoMessage;
-use hdf5_format::messages::attribute::AttributeMessage;
-use hdf5_format::messages::data_layout::{DataLayoutMessage, EarrayParams, FixedArrayParams};
-use hdf5_format::messages::filter::{FilterPipeline, self};
-use hdf5_format::chunk_index::extensible_array::{
-    ExtensibleArrayHeader, ExtensibleArrayIndexBlock, ExtensibleArrayDataBlock,
-    FilteredIndexBlock, FilteredDataBlock, FilteredChunkEntry,
-    compute_ndblk_addrs, compute_nsblk_addrs, compute_chunk_size_len,
-};
-use hdf5_format::chunk_index::fixed_array::{
-    FixedArrayHeader, FixedArrayDataBlock,
-};
-use hdf5_format::chunk_index::btree_v2::Bt2ChunkIndex;
+use hdf5_format::messages::*;
+use hdf5_format::object_header::ObjectHeader;
+use hdf5_format::superblock::*;
 use hdf5_format::{FormatContext, UNDEF_ADDR};
 
-use crate::file_handle::FileHandle;
 use crate::allocator::FileAllocator;
+use crate::file_handle::FileHandle;
 use crate::IoResult;
 
 /// Metadata for a dataset being written.
@@ -209,10 +207,10 @@ impl Hdf5Writer {
     /// for chunked datasets so that `write_chunk` and `extend_dataset` work
     /// on reopened datasets.
     pub fn open_append(path: &Path) -> IoResult<Self> {
-        use hdf5_format::messages::datatype::DatatypeMessage;
-        use hdf5_format::messages::dataspace::DataspaceMessage;
-        use hdf5_format::messages::data_layout::DataLayoutMessage;
         use hdf5_format::messages::attribute::AttributeMessage;
+        use hdf5_format::messages::data_layout::DataLayoutMessage;
+        use hdf5_format::messages::dataspace::DataspaceMessage;
+        use hdf5_format::messages::datatype::DatatypeMessage;
 
         let mut handle = FileHandle::open_readwrite(path)?;
         let file_size = handle.file_size()?;
@@ -235,7 +233,8 @@ impl Hdf5Writer {
         for (name, obj_addr) in &link_entries {
             // Read the dataset's full object header
             let ds_buf = handle.read_at_most(*obj_addr, 8192)?;
-            let (ds_header, _) = match hdf5_format::object_header::ObjectHeader::decode_any(&ds_buf) {
+            let (ds_header, _) = match hdf5_format::object_header::ObjectHeader::decode_any(&ds_buf)
+            {
                 Ok(h) => h,
                 Err(_) => continue,
             };
@@ -249,21 +248,31 @@ impl Hdf5Writer {
             for msg in &ds_header.messages {
                 match msg.msg_type {
                     hdf5_format::messages::MSG_DATATYPE => {
-                        if let Ok((dt, _)) = DatatypeMessage::decode(&msg.data, &ctx) { datatype = Some(dt); }
+                        if let Ok((dt, _)) = DatatypeMessage::decode(&msg.data, &ctx) {
+                            datatype = Some(dt);
+                        }
                     }
                     hdf5_format::messages::MSG_DATASPACE => {
-                        if let Ok((ds, _)) = DataspaceMessage::decode(&msg.data, &ctx) { dataspace = Some(ds); }
+                        if let Ok((ds, _)) = DataspaceMessage::decode(&msg.data, &ctx) {
+                            dataspace = Some(ds);
+                        }
                     }
                     hdf5_format::messages::MSG_DATA_LAYOUT => {
-                        if let Ok((dl, _)) = DataLayoutMessage::decode(&msg.data, &ctx) { layout = Some(dl); }
+                        if let Ok((dl, _)) = DataLayoutMessage::decode(&msg.data, &ctx) {
+                            layout = Some(dl);
+                        }
                     }
                     hdf5_format::messages::MSG_FILTER_PIPELINE => {
                         if let Ok((p, _)) = FilterPipeline::decode(&msg.data) {
-                            if !p.filters.is_empty() { fp = Some(p); }
+                            if !p.filters.is_empty() {
+                                fp = Some(p);
+                            }
                         }
                     }
                     hdf5_format::messages::MSG_ATTRIBUTE => {
-                        if let Ok((a, _)) = AttributeMessage::decode(&msg.data, &ctx) { attrs.push(a); }
+                        if let Ok((a, _)) = AttributeMessage::decode(&msg.data, &ctx) {
+                            attrs.push(a);
+                        }
                     }
                     _ => {}
                 }
@@ -296,10 +305,18 @@ impl Hdf5Writer {
                     info.data_addr = *address;
                     info.data_size = *size;
                 }
-                DataLayoutMessage::ChunkedV4 { chunk_dims, index_address, index_type, earray_params, .. } => {
+                DataLayoutMessage::ChunkedV4 {
+                    chunk_dims,
+                    index_address,
+                    index_type,
+                    earray_params,
+                    ..
+                } => {
                     let real_chunk_dims: Vec<u64> = chunk_dims[..chunk_dims.len() - 1].to_vec();
 
-                    if *index_type == hdf5_format::messages::data_layout::ChunkIndexType::ExtensibleArray {
+                    if *index_type
+                        == hdf5_format::messages::data_layout::ChunkIndexType::ExtensibleArray
+                    {
                         if let Some(params) = earray_params {
                             let ep = EarrayParams {
                                 max_nelmts_bits: params.max_nelmts_bits,
@@ -310,35 +327,56 @@ impl Hdf5Writer {
                             };
                             let ndblk_addrs = compute_ndblk_addrs(ep.sup_blk_min_data_ptrs);
                             let nsblk_addrs = compute_nsblk_addrs(
-                                ep.idx_blk_elmts, ep.data_blk_min_elmts,
-                                ep.sup_blk_min_data_ptrs, ep.max_nelmts_bits,
+                                ep.idx_blk_elmts,
+                                ep.data_blk_min_elmts,
+                                ep.sup_blk_min_data_ptrs,
+                                ep.max_nelmts_bits,
                             );
 
                             // Read EA header
                             let hdr_buf = handle.read_at_most(*index_address, 256)?;
                             let ea_header = ExtensibleArrayHeader::decode(&hdr_buf, &ctx)?;
 
-                            let is_filtered = ea_header.class_id == hdf5_format::chunk_index::extensible_array::EA_CLS_FILT_CHUNK;
+                            let is_filtered = ea_header.class_id
+                                == hdf5_format::chunk_index::extensible_array::EA_CLS_FILT_CHUNK;
                             let chunk_size_len = if is_filtered {
                                 ea_header.raw_elmt_size - ctx.sizeof_addr - 4
-                            } else { 0 };
+                            } else {
+                                0
+                            };
 
                             // Read EA index block
                             let ea_iblk_addr = ea_header.idx_blk_addr;
                             let ea_iblk = if ea_iblk_addr != UNDEF_ADDR {
                                 let iblk_buf = handle.read_at_most(ea_iblk_addr, 65536)?;
                                 ExtensibleArrayIndexBlock::decode(
-                                    &iblk_buf, &ctx, ep.idx_blk_elmts as usize, ndblk_addrs, nsblk_addrs,
-                                ).unwrap_or_else(|_| ExtensibleArrayIndexBlock::new(
-                                    *index_address, ep.idx_blk_elmts, ndblk_addrs, nsblk_addrs,
-                                ))
+                                    &iblk_buf,
+                                    &ctx,
+                                    ep.idx_blk_elmts as usize,
+                                    ndblk_addrs,
+                                    nsblk_addrs,
+                                )
+                                .unwrap_or_else(|_| {
+                                    ExtensibleArrayIndexBlock::new(
+                                        *index_address,
+                                        ep.idx_blk_elmts,
+                                        ndblk_addrs,
+                                        nsblk_addrs,
+                                    )
+                                })
                             } else {
                                 ExtensibleArrayIndexBlock::new(
-                                    *index_address, ep.idx_blk_elmts, ndblk_addrs, nsblk_addrs,
+                                    *index_address,
+                                    ep.idx_blk_elmts,
+                                    ndblk_addrs,
+                                    nsblk_addrs,
                                 )
                             };
 
-                            let max_dims = info.dataspace.max_dims.clone()
+                            let max_dims = info
+                                .dataspace
+                                .max_dims
+                                .clone()
                                 .unwrap_or_else(|| info.dataspace.dims.clone());
 
                             info.chunked = Some(ChunkedDatasetInfo {
@@ -403,11 +441,21 @@ impl Hdf5Writer {
 
                         // Try to recurse into groups
                         if let Ok(child_buf) = handle.read_at_most(*address, 8192) {
-                            if let Ok((child_header, _)) = hdf5_format::object_header::ObjectHeader::decode_any(&child_buf) {
-                                let has_links = child_header.messages.iter()
+                            if let Ok((child_header, _)) =
+                                hdf5_format::object_header::ObjectHeader::decode_any(&child_buf)
+                            {
+                                let has_links = child_header
+                                    .messages
+                                    .iter()
                                     .any(|m| m.msg_type == hdf5_format::messages::MSG_LINK);
                                 if has_links {
-                                    let _ = Self::collect_links_recursive(handle, &child_header, ctx, &full_name, out);
+                                    let _ = Self::collect_links_recursive(
+                                        handle,
+                                        &child_header,
+                                        ctx,
+                                        &full_name,
+                                        out,
+                                    );
                                 }
                             }
                         }
@@ -449,7 +497,8 @@ impl Hdf5Writer {
         // Check for duplicates
         if self.groups.iter().any(|g| g.name == full_name) {
             return Err(crate::IoError::InvalidState(format!(
-                "group '{}' already exists", full_name
+                "group '{}' already exists",
+                full_name
             )));
         }
 
@@ -457,10 +506,13 @@ impl Hdf5Writer {
         let parent_idx = if parent_path == "/" {
             None
         } else {
-            let idx = self.groups.iter().position(|g| g.name == parent_path)
-                .ok_or_else(|| crate::IoError::NotFound(format!(
-                    "parent group '{}' not found", parent_path
-                )))?;
+            let idx = self
+                .groups
+                .iter()
+                .position(|g| g.name == parent_path)
+                .ok_or_else(|| {
+                    crate::IoError::NotFound(format!("parent group '{}' not found", parent_path))
+                })?;
             Some(idx)
         };
 
@@ -486,10 +538,11 @@ impl Hdf5Writer {
     /// `group_path` is the full path of the group (e.g., "/detector").
     /// `ds_index` is the dataset index returned by `create_dataset`.
     pub fn assign_dataset_to_group(&mut self, group_path: &str, ds_index: usize) -> IoResult<()> {
-        let group_idx = self.groups.iter().position(|g| g.name == group_path)
-            .ok_or_else(|| crate::IoError::NotFound(format!(
-                "group '{}' not found", group_path
-            )))?;
+        let group_idx = self
+            .groups
+            .iter()
+            .position(|g| g.name == group_path)
+            .ok_or_else(|| crate::IoError::NotFound(format!("group '{}' not found", group_path)))?;
         self.groups[group_idx].child_datasets.push(ds_index);
         Ok(())
     }
@@ -505,7 +558,11 @@ impl Hdf5Writer {
         datatype: DatatypeMessage,
         dims: &[u64],
     ) -> IoResult<usize> {
-        let total_elements: u64 = if dims.is_empty() { 1 } else { dims.iter().product() };
+        let total_elements: u64 = if dims.is_empty() {
+            1
+        } else {
+            dims.iter().product()
+        };
         let element_size = datatype.element_size() as u64;
         let data_size = total_elements * element_size;
 
@@ -671,23 +728,20 @@ impl Hdf5Writer {
     /// Only the first (unlimited) dimension index is used for EA indexing.
     ///
     /// `data` must be exactly chunk_size bytes (product of chunk_dims * element_size).
-    pub fn write_chunk(
-        &mut self,
-        index: usize,
-        chunk_idx: u64,
-        data: &[u8],
-    ) -> IoResult<()> {
+    pub fn write_chunk(&mut self, index: usize, chunk_idx: u64, data: &[u8]) -> IoResult<()> {
         let ds = &self.datasets[index];
         let element_size = ds.datatype.element_size() as u64;
-        let chunked = ds.chunked.as_ref().ok_or_else(|| {
-            crate::IoError::InvalidState("not a chunked dataset".into())
-        })?;
+        let chunked = ds
+            .chunked
+            .as_ref()
+            .ok_or_else(|| crate::IoError::InvalidState("not a chunked dataset".into()))?;
         let chunk_bytes: u64 = chunked.chunk_dims.iter().product::<u64>() * element_size;
 
         if data.len() as u64 != chunk_bytes {
             return Err(crate::IoError::InvalidState(format!(
                 "chunk data size mismatch: expected {} bytes, got {}",
-                chunk_bytes, data.len()
+                chunk_bytes,
+                data.len()
             )));
         }
 
@@ -767,13 +821,18 @@ impl Hdf5Writer {
                 // Use filtered data blocks / index block dblk_addrs
                 let filt_iblk = chunked.filt_iblk.as_mut().unwrap();
                 if filt_iblk.dblk_addrs[dblk_idx] == UNDEF_ADDR {
-                    let mut dblk = FilteredDataBlock::new(
-                        chunked.ea_header_addr, cumulative, block_nelmts,
-                    );
+                    let mut dblk =
+                        FilteredDataBlock::new(chunked.ea_header_addr, cumulative, block_nelmts);
                     dblk.elements[offset_in_block] = FilteredChunkEntry {
-                        addr: chunk_addr, nbytes: compressed_size, filter_mask: 0,
+                        addr: chunk_addr,
+                        nbytes: compressed_size,
+                        filter_mask: 0,
                     };
-                    let dblk_encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits, chunked.chunk_size_len);
+                    let dblk_encoded = dblk.encode(
+                        &self.ctx,
+                        chunked.earray_params.max_nelmts_bits,
+                        chunked.chunk_size_len,
+                    );
                     let dblk_addr = self.allocator.allocate(dblk_encoded.len() as u64);
                     self.handle.write_at(dblk_addr, &dblk_encoded)?;
                     filt_iblk.dblk_addrs[dblk_idx] = dblk_addr;
@@ -782,11 +841,21 @@ impl Hdf5Writer {
                     chunked.ea_header.size_dblks_created += dblk_encoded.len() as u64;
                 } else {
                     let dblk_addr = filt_iblk.dblk_addrs[dblk_idx];
-                    if let Some((_, ref mut dblk)) = chunked.filt_data_blocks.iter_mut().find(|(a, _)| *a == dblk_addr) {
+                    if let Some((_, ref mut dblk)) = chunked
+                        .filt_data_blocks
+                        .iter_mut()
+                        .find(|(a, _)| *a == dblk_addr)
+                    {
                         dblk.elements[offset_in_block] = FilteredChunkEntry {
-                            addr: chunk_addr, nbytes: compressed_size, filter_mask: 0,
+                            addr: chunk_addr,
+                            nbytes: compressed_size,
+                            filter_mask: 0,
                         };
-                        let dblk_encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits, chunked.chunk_size_len);
+                        let dblk_encoded = dblk.encode(
+                            &self.ctx,
+                            chunked.earray_params.max_nelmts_bits,
+                            chunked.chunk_size_len,
+                        );
                         self.handle.write_at(dblk_addr, &dblk_encoded)?;
                     }
                 }
@@ -794,10 +863,13 @@ impl Hdf5Writer {
                 // Use unfiltered data blocks
                 if chunked.ea_iblk.dblk_addrs[dblk_idx] == UNDEF_ADDR {
                     let mut dblk = ExtensibleArrayDataBlock::new(
-                        chunked.ea_header_addr, cumulative, block_nelmts,
+                        chunked.ea_header_addr,
+                        cumulative,
+                        block_nelmts,
                     );
                     dblk.elements[offset_in_block] = chunk_addr;
-                    let dblk_encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
+                    let dblk_encoded =
+                        dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
                     let dblk_addr = self.allocator.allocate(dblk_encoded.len() as u64);
                     self.handle.write_at(dblk_addr, &dblk_encoded)?;
                     chunked.ea_iblk.dblk_addrs[dblk_idx] = dblk_addr;
@@ -806,19 +878,28 @@ impl Hdf5Writer {
                     chunked.ea_header.size_dblks_created += dblk_encoded.len() as u64;
                 } else {
                     let dblk_addr = chunked.ea_iblk.dblk_addrs[dblk_idx];
-                    if let Some((_, ref mut dblk)) = chunked.data_blocks.iter_mut().find(|(a, _)| *a == dblk_addr) {
+                    if let Some((_, ref mut dblk)) = chunked
+                        .data_blocks
+                        .iter_mut()
+                        .find(|(a, _)| *a == dblk_addr)
+                    {
                         dblk.elements[offset_in_block] = chunk_addr;
-                        let dblk_encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
+                        let dblk_encoded =
+                            dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
                         self.handle.write_at(dblk_addr, &dblk_encoded)?;
                     } else {
                         // Data block exists on disk but not in memory (append mode).
                         // Read it, update, and write back.
                         let dblk_buf = self.handle.read_at_most(dblk_addr, 65536)?;
                         if let Ok(mut dblk) = ExtensibleArrayDataBlock::decode(
-                            &dblk_buf, &self.ctx, chunked.earray_params.max_nelmts_bits, block_nelmts,
+                            &dblk_buf,
+                            &self.ctx,
+                            chunked.earray_params.max_nelmts_bits,
+                            block_nelmts,
                         ) {
                             dblk.elements[offset_in_block] = chunk_addr;
-                            let dblk_encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
+                            let dblk_encoded =
+                                dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
                             self.handle.write_at(dblk_addr, &dblk_encoded)?;
                             chunked.data_blocks.push((dblk_addr, dblk));
                         }
@@ -831,9 +912,19 @@ impl Hdf5Writer {
                 chunked.ea_header.max_idx_set = chunk_idx + 1;
             }
             let total_realized = if is_filtered {
-                idx_blk_elmts + chunked.filt_data_blocks.iter().map(|(_, db)| db.elements.len() as u64).sum::<u64>()
+                idx_blk_elmts
+                    + chunked
+                        .filt_data_blocks
+                        .iter()
+                        .map(|(_, db)| db.elements.len() as u64)
+                        .sum::<u64>()
             } else {
-                idx_blk_elmts + chunked.data_blocks.iter().map(|(_, db)| db.elements.len() as u64).sum::<u64>()
+                idx_blk_elmts
+                    + chunked
+                        .data_blocks
+                        .iter()
+                        .map(|(_, db)| db.elements.len() as u64)
+                        .sum::<u64>()
             };
             chunked.ea_header.num_elmts_realized = total_realized;
         }
@@ -878,7 +969,8 @@ impl Hdf5Writer {
         if data.len() as u64 != out_elems * element_size {
             return Err(crate::IoError::InvalidState(format!(
                 "data size mismatch: expected {} bytes, got {}",
-                out_elems * element_size, data.len()
+                out_elems * element_size,
+                data.len()
             )));
         }
 
@@ -892,7 +984,11 @@ impl Hdf5Writer {
 
         // Write row-by-row along the last dimension
         let row_bytes = (counts[ndims - 1] * element_size) as usize;
-        let n_rows: u64 = if ndims > 1 { counts[..ndims - 1].iter().product() } else { 1 };
+        let n_rows: u64 = if ndims > 1 {
+            counts[..ndims - 1].iter().product()
+        } else {
+            1
+        };
 
         if ndims == 1 {
             let offset = base_addr + starts[0] * element_size;
@@ -908,11 +1004,14 @@ impl Hdf5Writer {
             }
 
             let src_offset = row as usize * row_bytes;
-            self.handle.write_at(file_offset, &data[src_offset..src_offset + row_bytes])?;
+            self.handle
+                .write_at(file_offset, &data[src_offset..src_offset + row_bytes])?;
 
             for d in (0..ndims - 1).rev() {
                 coords[d] += 1;
-                if coords[d] < counts[d] { break; }
+                if coords[d] < counts[d] {
+                    break;
+                }
                 coords[d] = 0;
             }
         }
@@ -921,10 +1020,7 @@ impl Hdf5Writer {
     }
 
     /// Add an attribute to the root group (file-level attribute).
-    pub fn add_root_attribute(
-        &mut self,
-        attr: hdf5_format::messages::attribute::AttributeMessage,
-    ) {
+    pub fn add_root_attribute(&mut self, attr: hdf5_format::messages::attribute::AttributeMessage) {
         self.root_attributes.push(attr);
     }
 
@@ -932,12 +1028,8 @@ impl Hdf5Writer {
     ///
     /// Stores strings in a global heap collection. The dataset raw data
     /// consists of vlen references (collection_addr + object_index pairs).
-    pub fn create_vlen_string_dataset(
-        &mut self,
-        name: &str,
-        strings: &[&str],
-    ) -> IoResult<usize> {
-        use hdf5_format::global_heap::{GlobalHeapCollection, encode_vlen_reference};
+    pub fn create_vlen_string_dataset(&mut self, name: &str, strings: &[&str]) -> IoResult<usize> {
+        use hdf5_format::global_heap::{encode_vlen_reference, GlobalHeapCollection};
         use hdf5_format::messages::datatype::DatatypeMessage;
 
         let num_strings = strings.len() as u64;
@@ -961,7 +1053,9 @@ impl Hdf5Writer {
         let mut raw_data = Vec::with_capacity(data_size);
         for &obj_idx in &obj_indices {
             raw_data.extend_from_slice(&encode_vlen_reference(
-                gcol_addr, obj_idx as u32, &self.ctx,
+                gcol_addr,
+                obj_idx as u32,
+                &self.ctx,
             ));
         }
 
@@ -1167,7 +1261,8 @@ impl Hdf5Writer {
         );
 
         // Create filtered EA header
-        let mut ea_header = ExtensibleArrayHeader::new_for_filtered_chunks(&self.ctx, chunk_size_len);
+        let mut ea_header =
+            ExtensibleArrayHeader::new_for_filtered_chunks(&self.ctx, chunk_size_len);
         ea_header.max_nelmts_bits = earray_params.max_nelmts_bits;
         ea_header.idx_blk_elmts = earray_params.idx_blk_elmts;
         ea_header.data_blk_min_elmts = earray_params.data_blk_min_elmts;
@@ -1179,7 +1274,10 @@ impl Hdf5Writer {
 
         // Create filtered index block
         let filt_iblk = FilteredIndexBlock::new(
-            ea_header_addr, earray_params.idx_blk_elmts, ndblk_addrs, nsblk_addrs,
+            ea_header_addr,
+            earray_params.idx_blk_elmts,
+            ndblk_addrs,
+            nsblk_addrs,
         );
         let iblk_encoded = filt_iblk.encode(&self.ctx, chunk_size_len);
         let ea_iblk_addr = self.allocator.allocate(iblk_encoded.len() as u64);
@@ -1197,7 +1295,10 @@ impl Hdf5Writer {
 
         // Also create a dummy unfiltered iblk (not used for compressed, but needed for struct)
         let ea_iblk = ExtensibleArrayIndexBlock::new(
-            ea_header_addr, earray_params.idx_blk_elmts, ndblk_addrs, nsblk_addrs,
+            ea_header_addr,
+            earray_params.idx_blk_elmts,
+            ndblk_addrs,
+            nsblk_addrs,
         );
 
         let idx = self.datasets.len();
@@ -1251,11 +1352,14 @@ impl Hdf5Writer {
         let earray_params = EarrayParams::default_params();
         let ndblk_addrs = compute_ndblk_addrs(earray_params.sup_blk_min_data_ptrs);
         let nsblk_addrs = compute_nsblk_addrs(
-            earray_params.idx_blk_elmts, earray_params.data_blk_min_elmts,
-            earray_params.sup_blk_min_data_ptrs, earray_params.max_nelmts_bits,
+            earray_params.idx_blk_elmts,
+            earray_params.data_blk_min_elmts,
+            earray_params.sup_blk_min_data_ptrs,
+            earray_params.max_nelmts_bits,
         );
 
-        let mut ea_header = ExtensibleArrayHeader::new_for_filtered_chunks(&self.ctx, chunk_size_len);
+        let mut ea_header =
+            ExtensibleArrayHeader::new_for_filtered_chunks(&self.ctx, chunk_size_len);
         ea_header.max_nelmts_bits = earray_params.max_nelmts_bits;
         ea_header.idx_blk_elmts = earray_params.idx_blk_elmts;
         ea_header.data_blk_min_elmts = earray_params.data_blk_min_elmts;
@@ -1266,7 +1370,10 @@ impl Hdf5Writer {
         let ea_header_addr = self.allocator.allocate(hdr_encoded.len() as u64);
 
         let filt_iblk = FilteredIndexBlock::new(
-            ea_header_addr, earray_params.idx_blk_elmts, ndblk_addrs, nsblk_addrs,
+            ea_header_addr,
+            earray_params.idx_blk_elmts,
+            ndblk_addrs,
+            nsblk_addrs,
         );
         let iblk_encoded = filt_iblk.encode(&self.ctx, chunk_size_len);
         let ea_iblk_addr = self.allocator.allocate(iblk_encoded.len() as u64);
@@ -1276,24 +1383,45 @@ impl Hdf5Writer {
         self.handle.write_at(ea_header_addr, &hdr_encoded)?;
         self.handle.write_at(ea_iblk_addr, &iblk_encoded)?;
 
-        let dataspace = DataspaceMessage { dims: dims.to_vec(), max_dims: Some(max_dims.to_vec()) };
+        let dataspace = DataspaceMessage {
+            dims: dims.to_vec(),
+            max_dims: Some(max_dims.to_vec()),
+        };
         let ea_iblk = ExtensibleArrayIndexBlock::new(
-            ea_header_addr, earray_params.idx_blk_elmts, ndblk_addrs, nsblk_addrs,
+            ea_header_addr,
+            earray_params.idx_blk_elmts,
+            ndblk_addrs,
+            nsblk_addrs,
         );
 
         let idx = self.datasets.len();
         self.datasets.push(DatasetInfo {
-            name: name.to_string(), datatype, dataspace,
-            obj_header_addr: 0, data_addr: UNDEF_ADDR, data_size: 0,
+            name: name.to_string(),
+            datatype,
+            dataspace,
+            obj_header_addr: 0,
+            data_addr: UNDEF_ADDR,
+            data_size: 0,
             attributes: Vec::new(),
-            obj_header_written_addr: None, obj_header_encoded_size: 0,
+            obj_header_written_addr: None,
+            obj_header_encoded_size: 0,
             filter_pipeline: Some(pipeline),
-            fixed_array: None, btree_v2: None,
+            fixed_array: None,
+            btree_v2: None,
             chunked: Some(ChunkedDatasetInfo {
-                chunk_dims: chunk_dims.to_vec(), max_dims: max_dims.to_vec(),
-                earray_params, ea_header_addr, ea_iblk_addr, ndblk_addrs,
-                ea_header, ea_iblk, data_blocks: Vec::new(), chunks_written: 0,
-                filt_iblk: Some(filt_iblk), filt_data_blocks: Vec::new(), chunk_size_len,
+                chunk_dims: chunk_dims.to_vec(),
+                max_dims: max_dims.to_vec(),
+                earray_params,
+                ea_header_addr,
+                ea_iblk_addr,
+                ndblk_addrs,
+                ea_header,
+                ea_iblk,
+                data_blocks: Vec::new(),
+                chunks_written: 0,
+                filt_iblk: Some(filt_iblk),
+                filt_data_blocks: Vec::new(),
+                chunk_size_len,
             }),
         });
         Ok(idx)
@@ -1310,9 +1438,10 @@ impl Hdf5Writer {
     ) -> IoResult<()> {
         let ds = &self.datasets[index];
         let element_size = ds.datatype.element_size() as u64;
-        let fa = ds.fixed_array.as_ref().ok_or_else(|| {
-            crate::IoError::InvalidState("not a fixed-array dataset".into())
-        })?;
+        let fa = ds
+            .fixed_array
+            .as_ref()
+            .ok_or_else(|| crate::IoError::InvalidState("not a fixed-array dataset".into()))?;
         let chunk_bytes: u64 = fa.chunk_dims.iter().product::<u64>() * element_size;
 
         // Possibly compress the data
@@ -1374,9 +1503,10 @@ impl Hdf5Writer {
     ) -> IoResult<()> {
         let ds = &self.datasets[index];
         let element_size = ds.datatype.element_size() as u64;
-        let bt2 = ds.btree_v2.as_ref().ok_or_else(|| {
-            crate::IoError::InvalidState("not a B-tree v2 dataset".into())
-        })?;
+        let bt2 = ds
+            .btree_v2
+            .as_ref()
+            .ok_or_else(|| crate::IoError::InvalidState("not a B-tree v2 dataset".into()))?;
         let chunk_bytes: u64 = bt2.chunk_dims.iter().product::<u64>() * element_size;
 
         if data.len() as u64 != chunk_bytes {
@@ -1402,11 +1532,7 @@ impl Hdf5Writer {
     /// Write multiple chunks in a batch, optionally compressing in parallel.
     ///
     /// `chunks` is a list of (chunk_idx, data) pairs for an EA-indexed dataset.
-    pub fn write_chunks_batch(
-        &mut self,
-        ds_index: usize,
-        chunks: &[(u64, &[u8])],
-    ) -> IoResult<()> {
+    pub fn write_chunks_batch(&mut self, ds_index: usize, chunks: &[(u64, &[u8])]) -> IoResult<()> {
         #[cfg(feature = "parallel")]
         {
             // If filter pipeline is set, compress all chunks in parallel
@@ -1444,9 +1570,10 @@ impl Hdf5Writer {
 
         let is_filtered = self.datasets[index].filter_pipeline.is_some();
         let idx_blk_elmts = {
-            let c = self.datasets[index].chunked.as_ref().ok_or_else(|| {
-                crate::IoError::InvalidState("not a chunked dataset".into())
-            })?;
+            let c = self.datasets[index]
+                .chunked
+                .as_ref()
+                .ok_or_else(|| crate::IoError::InvalidState("not a chunked dataset".into()))?;
             c.earray_params.idx_blk_elmts as u64
         };
 
@@ -1455,7 +1582,9 @@ impl Hdf5Writer {
             if is_filtered {
                 if let Some(ref mut fiblk) = chunked.filt_iblk {
                     fiblk.elements[chunk_idx as usize] = FilteredChunkEntry {
-                        addr: chunk_addr, nbytes: compressed_size, filter_mask: 0,
+                        addr: chunk_addr,
+                        nbytes: compressed_size,
+                        filter_mask: 0,
                     };
                 }
             } else {
@@ -1478,11 +1607,16 @@ impl Hdf5Writer {
             let mut current_size = min_elmts;
             let mut pair_count = 0;
             loop {
-                if offset_in_dblks < cumulative + current_size { break; }
+                if offset_in_dblks < cumulative + current_size {
+                    break;
+                }
                 cumulative += current_size;
                 dblk_idx += 1;
                 pair_count += 1;
-                if pair_count >= 2 { pair_count = 0; current_size *= 2; }
+                if pair_count >= 2 {
+                    pair_count = 0;
+                    current_size *= 2;
+                }
                 if dblk_idx >= chunked.ndblk_addrs {
                     return Err(crate::IoError::InvalidState(
                         "chunk index exceeds extensible array capacity".into(),
@@ -1495,11 +1629,18 @@ impl Hdf5Writer {
             if is_filtered {
                 let filt_iblk = chunked.filt_iblk.as_mut().unwrap();
                 if filt_iblk.dblk_addrs[dblk_idx] == UNDEF_ADDR {
-                    let mut dblk = FilteredDataBlock::new(chunked.ea_header_addr, cumulative, block_nelmts);
+                    let mut dblk =
+                        FilteredDataBlock::new(chunked.ea_header_addr, cumulative, block_nelmts);
                     dblk.elements[offset_in_block] = FilteredChunkEntry {
-                        addr: chunk_addr, nbytes: compressed_size, filter_mask: 0,
+                        addr: chunk_addr,
+                        nbytes: compressed_size,
+                        filter_mask: 0,
                     };
-                    let encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits, chunked.chunk_size_len);
+                    let encoded = dblk.encode(
+                        &self.ctx,
+                        chunked.earray_params.max_nelmts_bits,
+                        chunked.chunk_size_len,
+                    );
                     let dblk_addr = self.allocator.allocate(encoded.len() as u64);
                     self.handle.write_at(dblk_addr, &encoded)?;
                     filt_iblk.dblk_addrs[dblk_idx] = dblk_addr;
@@ -1508,17 +1649,31 @@ impl Hdf5Writer {
                     chunked.ea_header.size_dblks_created += encoded.len() as u64;
                 } else {
                     let dblk_addr = filt_iblk.dblk_addrs[dblk_idx];
-                    if let Some((_, ref mut dblk)) = chunked.filt_data_blocks.iter_mut().find(|(a, _)| *a == dblk_addr) {
+                    if let Some((_, ref mut dblk)) = chunked
+                        .filt_data_blocks
+                        .iter_mut()
+                        .find(|(a, _)| *a == dblk_addr)
+                    {
                         dblk.elements[offset_in_block] = FilteredChunkEntry {
-                            addr: chunk_addr, nbytes: compressed_size, filter_mask: 0,
+                            addr: chunk_addr,
+                            nbytes: compressed_size,
+                            filter_mask: 0,
                         };
-                        let encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits, chunked.chunk_size_len);
+                        let encoded = dblk.encode(
+                            &self.ctx,
+                            chunked.earray_params.max_nelmts_bits,
+                            chunked.chunk_size_len,
+                        );
                         self.handle.write_at(dblk_addr, &encoded)?;
                     }
                 }
             } else {
                 if chunked.ea_iblk.dblk_addrs[dblk_idx] == UNDEF_ADDR {
-                    let mut dblk = ExtensibleArrayDataBlock::new(chunked.ea_header_addr, cumulative, block_nelmts);
+                    let mut dblk = ExtensibleArrayDataBlock::new(
+                        chunked.ea_header_addr,
+                        cumulative,
+                        block_nelmts,
+                    );
                     dblk.elements[offset_in_block] = chunk_addr;
                     let encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
                     let dblk_addr = self.allocator.allocate(encoded.len() as u64);
@@ -1529,7 +1684,11 @@ impl Hdf5Writer {
                     chunked.ea_header.size_dblks_created += encoded.len() as u64;
                 } else {
                     let dblk_addr = chunked.ea_iblk.dblk_addrs[dblk_idx];
-                    if let Some((_, ref mut dblk)) = chunked.data_blocks.iter_mut().find(|(a, _)| *a == dblk_addr) {
+                    if let Some((_, ref mut dblk)) = chunked
+                        .data_blocks
+                        .iter_mut()
+                        .find(|(a, _)| *a == dblk_addr)
+                    {
                         dblk.elements[offset_in_block] = chunk_addr;
                         let encoded = dblk.encode(&self.ctx, chunked.earray_params.max_nelmts_bits);
                         self.handle.write_at(dblk_addr, &encoded)?;
@@ -1542,9 +1701,19 @@ impl Hdf5Writer {
                 chunked.ea_header.max_idx_set = chunk_idx + 1;
             }
             let total_realized = if is_filtered {
-                idx_blk_elmts + chunked.filt_data_blocks.iter().map(|(_, db)| db.elements.len() as u64).sum::<u64>()
+                idx_blk_elmts
+                    + chunked
+                        .filt_data_blocks
+                        .iter()
+                        .map(|(_, db)| db.elements.len() as u64)
+                        .sum::<u64>()
             } else {
-                idx_blk_elmts + chunked.data_blocks.iter().map(|(_, db)| db.elements.len() as u64).sum::<u64>()
+                idx_blk_elmts
+                    + chunked
+                        .data_blocks
+                        .iter()
+                        .map(|(_, db)| db.elements.len() as u64)
+                        .sum::<u64>()
             };
             chunked.ea_header.num_elmts_realized = total_realized;
         }
@@ -1605,7 +1774,8 @@ impl Hdf5Writer {
             self.handle.write_at(leaf_addr, &leaf_bytes)?;
 
             // Update header with new root node address
-            let mut hdr = hdf5_format::chunk_index::btree_v2::Bt2Header::decode(&hdr_bytes, &self.ctx)?;
+            let mut hdr =
+                hdf5_format::chunk_index::btree_v2::Bt2Header::decode(&hdr_bytes, &self.ctx)?;
             hdr.root_node_addr = leaf_addr;
             let hdr_encoded = hdr.encode(&self.ctx);
             self.handle.write_at(bt2.bt2_header_addr, &hdr_encoded)?;
@@ -1646,9 +1816,9 @@ impl Hdf5Writer {
     /// Requires that the root group has already been written (via `finalize`
     /// or `finalize_for_swmr`).
     pub fn write_superblock(&mut self, flags: u8) -> IoResult<()> {
-        let root_addr = self.root_group_addr.ok_or_else(|| {
-            crate::IoError::InvalidState("root group not yet written".into())
-        })?;
+        let root_addr = self
+            .root_group_addr
+            .ok_or_else(|| crate::IoError::InvalidState("root group not yet written".into()))?;
         let sb = SuperblockV2V3 {
             version: SUPERBLOCK_V3,
             sizeof_offsets: self.ctx.sizeof_addr,
@@ -1670,9 +1840,9 @@ impl Hdf5Writer {
     /// Only the dataspace dimensions change; the encoded size must not exceed
     /// the originally allocated space.
     pub fn write_dataset_header_inplace(&mut self, index: usize) -> IoResult<()> {
-        let addr = self.datasets[index].obj_header_written_addr.ok_or_else(|| {
-            crate::IoError::InvalidState("dataset header not yet written".into())
-        })?;
+        let addr = self.datasets[index]
+            .obj_header_written_addr
+            .ok_or_else(|| crate::IoError::InvalidState("dataset header not yet written".into()))?;
         let original_size = self.datasets[index].obj_header_encoded_size;
 
         let header = self.build_dataset_header(index);
@@ -1681,7 +1851,8 @@ impl Hdf5Writer {
         if encoded.len() > original_size {
             return Err(crate::IoError::InvalidState(format!(
                 "dataset header grew from {} to {} bytes; cannot rewrite in place",
-                original_size, encoded.len()
+                original_size,
+                encoded.len()
             )));
         }
 
@@ -1795,7 +1966,9 @@ impl Hdf5Writer {
                 // Existing dataset from append mode.
                 // If it has chunked info with chunks_written > 0, it was modified
                 // and needs a new object header.
-                let modified = self.datasets[i].chunked.as_ref()
+                let modified = self.datasets[i]
+                    .chunked
+                    .as_ref()
                     .is_some_and(|c| c.chunks_written > 0);
                 if !modified {
                     continue;
@@ -1901,10 +2074,7 @@ impl Hdf5Writer {
         } else if let Some(ref bt2) = ds.btree_v2 {
             let mut layout_dims = bt2.chunk_dims.clone();
             layout_dims.push(ds.datatype.element_size() as u64);
-            DataLayoutMessage::chunked_v4_btree_v2(
-                layout_dims,
-                bt2.bt2_header_addr,
-            )
+            DataLayoutMessage::chunked_v4_btree_v2(layout_dims, bt2.bt2_header_addr)
         } else {
             DataLayoutMessage::contiguous(ds.data_addr, ds.data_size)
         };
@@ -1980,7 +2150,9 @@ impl Hdf5Writer {
         header.add_message(MSG_GROUP_INFO, 0x00, gi_msg);
 
         // Collect dataset indices that belong to the root group (not assigned to any subgroup)
-        let datasets_in_subgroups: std::collections::HashSet<usize> = self.groups.iter()
+        let datasets_in_subgroups: std::collections::HashSet<usize> = self
+            .groups
+            .iter()
             .flat_map(|g| g.child_datasets.iter().copied())
             .collect();
 
@@ -2131,9 +2303,9 @@ mod tests {
             .create_chunked_dataset(
                 "data",
                 DatatypeMessage::f64_type(),
-                &[0, 4],       // start empty
+                &[0, 4],        // start empty
                 &[u64::MAX, 4], // unlimited first dim
-                &[1, 4],       // chunk = [1, 4]
+                &[1, 4],        // chunk = [1, 4]
             )
             .unwrap();
 
@@ -2155,7 +2327,8 @@ mod tests {
         assert_eq!(reader.dataset_shape("data").unwrap(), vec![3, 4]);
 
         let raw = reader.read_dataset_raw("data").unwrap();
-        let values: Vec<f64> = raw.chunks(8)
+        let values: Vec<f64> = raw
+            .chunks(8)
             .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 12);
@@ -2197,7 +2370,8 @@ mod tests {
         assert_eq!(reader.dataset_shape("frames").unwrap(), vec![10, 2]);
 
         let raw = reader.read_dataset_raw("frames").unwrap();
-        let values: Vec<i32> = raw.chunks(4)
+        let values: Vec<i32> = raw
+            .chunks(4)
             .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 20);
@@ -2218,26 +2392,38 @@ mod tests {
             .create_fixed_array_dataset(
                 "grid",
                 DatatypeMessage::i32_type(),
-                &[4, 6],       // 4x6 grid
-                &[2, 3],       // chunk = 2x3
+                &[4, 6], // 4x6 grid
+                &[2, 3], // chunk = 2x3
             )
             .unwrap();
 
         // Write all chunks: 2x2 = 4 chunks
         // chunk (0,0): rows 0-1, cols 0-2
-        let c00: Vec<u8> = [0i32, 1, 2, 6, 7, 8].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let c00: Vec<u8> = [0i32, 1, 2, 6, 7, 8]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_fixed_array(idx, &[0, 0], &c00).unwrap();
 
         // chunk (0,1): rows 0-1, cols 3-5
-        let c01: Vec<u8> = [3i32, 4, 5, 9, 10, 11].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let c01: Vec<u8> = [3i32, 4, 5, 9, 10, 11]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_fixed_array(idx, &[0, 1], &c01).unwrap();
 
         // chunk (1,0): rows 2-3, cols 0-2
-        let c10: Vec<u8> = [12i32, 13, 14, 18, 19, 20].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let c10: Vec<u8> = [12i32, 13, 14, 18, 19, 20]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_fixed_array(idx, &[1, 0], &c10).unwrap();
 
         // chunk (1,1): rows 2-3, cols 3-5
-        let c11: Vec<u8> = [15i32, 16, 17, 21, 22, 23].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let c11: Vec<u8> = [15i32, 16, 17, 21, 22, 23]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_fixed_array(idx, &[1, 1], &c11).unwrap();
 
         writer.close().unwrap();
@@ -2270,31 +2456,39 @@ mod tests {
             .create_btree_v2_dataset(
                 "data",
                 DatatypeMessage::f64_type(),
-                &[0, 0],            // start empty
+                &[0, 0],               // start empty
                 &[u64::MAX, u64::MAX], // both dims unlimited
-                &[2, 3],            // chunk = 2x3
+                &[2, 3],               // chunk = 2x3
             )
             .unwrap();
 
         // Write chunks for a 4x6 dataset
         // chunk (0,0)
         let c00: Vec<u8> = [0.0f64, 1.0, 2.0, 6.0, 7.0, 8.0]
-            .iter().flat_map(|v| v.to_le_bytes()).collect();
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_btree_v2(idx, &[0, 0], &c00).unwrap();
 
         // chunk (0,1)
         let c01: Vec<u8> = [3.0f64, 4.0, 5.0, 9.0, 10.0, 11.0]
-            .iter().flat_map(|v| v.to_le_bytes()).collect();
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_btree_v2(idx, &[0, 1], &c01).unwrap();
 
         // chunk (1,0)
         let c10: Vec<u8> = [12.0f64, 13.0, 14.0, 18.0, 19.0, 20.0]
-            .iter().flat_map(|v| v.to_le_bytes()).collect();
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_btree_v2(idx, &[1, 0], &c10).unwrap();
 
         // chunk (1,1)
         let c11: Vec<u8> = [15.0f64, 16.0, 17.0, 21.0, 22.0, 23.0]
-            .iter().flat_map(|v| v.to_le_bytes()).collect();
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_chunk_btree_v2(idx, &[1, 1], &c11).unwrap();
 
         writer.extend_dataset(idx, &[4, 6]).unwrap();
@@ -2377,11 +2571,9 @@ mod tests {
         let path = dir.join("test_swmr_append.h5");
 
         let mut swmr = SwmrWriter::create(&path).unwrap();
-        let idx = swmr.create_streaming_dataset(
-            "detector",
-            DatatypeMessage::u16_type(),
-            &[4, 4],
-        ).unwrap();
+        let idx = swmr
+            .create_streaming_dataset("detector", DatatypeMessage::u16_type(), &[4, 4])
+            .unwrap();
 
         swmr.start_swmr().unwrap();
 
@@ -2400,11 +2592,12 @@ mod tests {
         assert_eq!(reader.dataset_shape("detector").unwrap(), vec![5, 4, 4]);
 
         let raw = reader.read_dataset_raw("detector").unwrap();
-        let values: Vec<u16> = raw.chunks(2)
+        let values: Vec<u16> = raw
+            .chunks(2)
             .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         assert_eq!(values.len(), 80); // 5 * 4 * 4
-        // Verify first frame
+                                      // Verify first frame
         for (i, val) in values.iter().enumerate().take(16) {
             assert_eq!(*val, i as u16);
         }
@@ -2440,13 +2633,18 @@ mod tests {
             .create_dataset("group1/data", DatatypeMessage::i32_type(), &[3])
             .unwrap();
         writer.assign_dataset_to_group("/group1", ds_g0).unwrap();
-        let raw_g0: Vec<u8> = [10i32, 20, 30].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let raw_g0: Vec<u8> = [10i32, 20, 30]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         writer.write_dataset_raw(ds_g0, &raw_g0).unwrap();
 
         let ds_g1 = writer
             .create_dataset("group1/sub/values", DatatypeMessage::u8_type(), &[4])
             .unwrap();
-        writer.assign_dataset_to_group("/group1/sub", ds_g1).unwrap();
+        writer
+            .assign_dataset_to_group("/group1/sub", ds_g1)
+            .unwrap();
         writer.write_dataset_raw(ds_g1, &[1u8, 2, 3, 4]).unwrap();
 
         writer.close().unwrap();
@@ -2459,13 +2657,15 @@ mod tests {
         assert!(names.contains(&"group1/sub/values"), "names: {:?}", names);
 
         let raw = reader.read_dataset_raw("root_data").unwrap();
-        let vals: Vec<f64> = raw.chunks(8)
+        let vals: Vec<f64> = raw
+            .chunks(8)
             .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
             .collect();
         assert_eq!(vals, vec![1.0, 2.0]);
 
         let raw = reader.read_dataset_raw("group1/data").unwrap();
-        let vals: Vec<i32> = raw.chunks(4)
+        let vals: Vec<i32> = raw
+            .chunks(4)
             .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
             .collect();
         assert_eq!(vals, vec![10, 20, 30]);

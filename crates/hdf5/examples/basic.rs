@@ -1,7 +1,7 @@
 //! Basic usage example demonstrating contiguous, chunked, and compressed datasets.
 
-use hdf5::H5File;
 use hdf5::types::VarLenUnicode;
+use hdf5::H5File;
 
 fn main() {
     let path = "/tmp/hdf5rs_example.h5";
@@ -11,7 +11,8 @@ fn main() {
         let file = H5File::create(path).unwrap();
 
         // 1) Contiguous dataset
-        let ds = file.new_dataset::<f64>()
+        let ds = file
+            .new_dataset::<f64>()
             .shape([4usize, 5])
             .create("matrix")
             .unwrap();
@@ -19,7 +20,8 @@ fn main() {
         ds.write_raw(&data).unwrap();
 
         // 2) Chunked dataset with compression
-        let stream = file.new_dataset::<i32>()
+        let stream = file
+            .new_dataset::<i32>()
             .shape([0usize, 3])
             .chunk(&[1, 3])
             .max_shape(&[None, Some(3)])
@@ -35,7 +37,8 @@ fn main() {
         stream.extend(&[100, 3]).unwrap();
 
         // 3) String attribute
-        let attr = ds.new_attr::<VarLenUnicode>()
+        let attr = ds
+            .new_attr::<VarLenUnicode>()
             .shape(())
             .create("units")
             .unwrap();

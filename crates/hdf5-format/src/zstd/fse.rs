@@ -89,7 +89,12 @@ impl FseCTable {
             }
         }
 
-        Self { table_log, state_table, symbol_tt, max_symbol }
+        Self {
+            table_log,
+            state_table,
+            symbol_tt,
+            max_symbol,
+        }
     }
 
     /// Initialize FSE state for the first symbol (FSE_initCState2).
@@ -106,13 +111,16 @@ impl FseCTable {
         let stt = &self.symbol_tt[symbol];
         let nb_bits = (state.wrapping_add(stt.delta_nb_bits)) >> 16;
         let bits_out = state & ((1 << nb_bits) - 1);
-        let new_state = self.state_table[((state >> nb_bits) as i32 + stt.delta_find_state) as usize] as u32;
+        let new_state =
+            self.state_table[((state >> nb_bits) as i32 + stt.delta_find_state) as usize] as u32;
         (bits_out, nb_bits, new_state)
     }
 }
 
 fn highest_bit(v: u32) -> u32 {
-    if v == 0 { return 0; }
+    if v == 0 {
+        return 0;
+    }
     31 - v.leading_zeros()
 }
 
@@ -133,7 +141,9 @@ pub fn encode_sequences(
     use super::constants::*;
 
     let nb_seq = ll_codes.len();
-    if nb_seq == 0 { return vec![]; }
+    if nb_seq == 0 {
+        return vec![];
+    }
 
     let mut bw = BackwardBitWriter::new();
 
@@ -146,16 +156,19 @@ pub fn encode_sequences(
     // Encode extra bits for the last sequence
     let ll_bits_n = LL_BITS[ll_codes[last] as usize] as u32;
     bw.add_bits(ll_values[last] as u64, ll_bits_n);
-    if ll_bits_n > 0 { bw.flush_bits(); }
+    if ll_bits_n > 0 {
+        bw.flush_bits();
+    }
 
     let ml_bits_n = ML_BITS[ml_codes[last] as usize] as u32;
     bw.add_bits(ml_values[last] as u64, ml_bits_n);
-    if ml_bits_n > 0 { bw.flush_bits(); }
+    if ml_bits_n > 0 {
+        bw.flush_bits();
+    }
 
     let of_bits_n = off_codes[last] as u32;
     bw.add_bits(off_values[last] as u64, of_bits_n);
     bw.flush_bits();
-
 
     // Encode remaining sequences in reverse order
     if nb_seq >= 2 {

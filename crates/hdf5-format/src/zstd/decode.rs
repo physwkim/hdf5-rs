@@ -65,13 +65,13 @@ const ML_DEFAULT_ACC_LOG: u8 = 6;
 const OF_DEFAULT_ACC_LOG: u8 = 5;
 
 const LITERALS_LENGTH_DEFAULT_DISTRIBUTION: [i32; 36] = [
-    4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1,
-    1, 1, -1, -1, -1, -1,
+    4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1,
+    -1, -1, -1, -1,
 ];
 
 const MATCH_LENGTH_DEFAULT_DISTRIBUTION: [i32; 53] = [
-    1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1,
+    1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1,
 ];
 
 const OFFSET_DEFAULT_DISTRIBUTION: [i32; 29] = [
@@ -89,6 +89,18 @@ pub fn decode_huf_weights_from_fse(source: &[u8], header: u8) -> Result<Vec<u8>,
     full.extend_from_slice(source);
     let _ = ht.read_weights(&full)?;
     Ok(ht.weights.clone())
+}
+
+/// Parse FSE normalized probabilities from encoded header bytes.
+/// Returns (accuracy_log, probabilities, bytes_consumed).
+pub fn parse_fse_header(source: &[u8], max_log: u8) -> Result<(u8, Vec<i32>, usize), String> {
+    let mut table = FSETable::new(255);
+    let bytes = table.read_probabilities(source, max_log)?;
+    Ok((
+        table.accuracy_log,
+        table.symbol_probabilities.clone(),
+        bytes,
+    ))
 }
 
 /// Decompress a zstd-compressed byte slice, returning the uncompressed data.
@@ -168,10 +180,7 @@ impl<'s> BitReader<'s> {
 
     fn get_bits(&mut self, n: usize) -> Result<u64, String> {
         if n > 64 {
-            return Err(format!(
-                "Cannot read {} bits, maximum is 64",
-                n
-            ));
+            return Err(format!("Cannot read {} bits, maximum is 64", n));
         }
         if self.bits_left() < n {
             return Err(format!(
@@ -264,8 +273,7 @@ impl<'s> BitReaderReversed<'s> {
             }
         } else if self.index > 0 {
             if self.source.len() >= 8 {
-                self.bit_container =
-                    u64::from_le_bytes(self.source[..8].try_into().unwrap());
+                self.bit_container = u64::from_le_bytes(self.source[..8].try_into().unwrap());
             } else {
                 let mut value = [0; 8];
                 value[..self.source.len()].copy_from_slice(self.source);
@@ -589,8 +597,7 @@ fn fse_calc_baseline_and_numbits(
     let num_bits = highest_bit_set(slice_width) - 1;
 
     if state_number < num_double_width_state_slices {
-        let baseline =
-            num_single_width_state_slices * slice_width + state_number * slice_width * 2;
+        let baseline = num_single_width_state_slices * slice_width + state_number * slice_width * 2;
         (baseline, num_bits as u8 + 1)
     } else {
         let index_shifted = state_number - num_double_width_state_slices;
@@ -1045,8 +1052,7 @@ impl LiteralsSection {
                         Ok(1)
                     }
                     1 => {
-                        self.regenerated_size =
-                            (u32::from(raw[0]) >> 4) + (u32::from(raw[1]) << 4);
+                        self.regenerated_size = (u32::from(raw[0]) >> 4) + (u32::from(raw[1]) << 4);
                         Ok(2)
                     }
                     3 => {
@@ -1187,8 +1193,7 @@ impl SequencesHeader {
                         source.len()
                     ));
                 }
-                self.num_sequences =
-                    ((u32::from(source[0]) - 128) << 8) + u32::from(source[1]);
+                self.num_sequences = ((u32::from(source[0]) - 128) << 8) + u32::from(source[1]);
                 bytes_read += 2;
                 if self.num_sequences != 0 {
                     if source.len() < 3 {
@@ -1208,8 +1213,7 @@ impl SequencesHeader {
                         source.len()
                     ));
                 }
-                self.num_sequences =
-                    u32::from(source[1]) + (u32::from(source[2]) << 8) + 0x7F00;
+                self.num_sequences = u32::from(source[1]) + (u32::from(source[2]) << 8) + 0x7F00;
                 self.modes = Some(CompressionModes(source[3]));
                 bytes_read += 4;
             }
@@ -1508,23 +1512,18 @@ fn read_frame_header(r: &mut dyn std::io::Read) -> Result<(FrameHeader, u8), Fra
         bytes_read += 1;
     }
 
-    let dict_id_len = desc
-        .dictionary_id_bytes()
-        .map_err(FrameDecoderError::new)?
-        as usize;
+    let dict_id_len = desc.dictionary_id_bytes().map_err(FrameDecoderError::new)? as usize;
     if dict_id_len != 0 {
         let buf = &mut buf[..dict_id_len];
-        r.read_exact(buf).map_err(|e| {
-            FrameDecoderError::new(format!("Error reading dictionary id: {}", e))
-        })?;
+        r.read_exact(buf)
+            .map_err(|e| FrameDecoderError::new(format!("Error reading dictionary id: {}", e)))?;
         bytes_read += dict_id_len;
         // We don't support dictionaries, but we still need to skip these bytes
     }
 
     let fcs_len = desc
         .frame_content_size_bytes()
-        .map_err(FrameDecoderError::new)?
-        as usize;
+        .map_err(FrameDecoderError::new)? as usize;
     if fcs_len != 0 {
         let mut fcs_buf = [0u8; 8];
         let fcs_buf = &mut fcs_buf[..fcs_len];
@@ -1568,12 +1567,13 @@ fn read_block_header(r: &mut dyn std::io::Read) -> Result<(BlockHeader, u8), Str
         return Err("Found reserved block type".to_string());
     }
 
-    let block_size = u32::from(buf[0] >> 3)
-        | (u32::from(buf[1]) << 5)
-        | (u32::from(buf[2]) << 13);
+    let block_size = u32::from(buf[0] >> 3) | (u32::from(buf[1]) << 5) | (u32::from(buf[2]) << 13);
 
     if block_size > MAX_BLOCK_SIZE {
-        return Err(format!("Block size {} exceeds max {}", block_size, MAX_BLOCK_SIZE));
+        return Err(format!(
+            "Block size {} exceeds max {}",
+            block_size, MAX_BLOCK_SIZE
+        ));
     }
 
     let decompressed_size = match block_type {
@@ -1843,10 +1843,7 @@ fn decode_sequences_with_rle(
     }
 
     if br.bits_remaining() > 0 {
-        Err(format!(
-            "Extra bits remaining: {}",
-            br.bits_remaining()
-        ))
+        Err(format!("Extra bits remaining: {}", br.bits_remaining()))
     } else {
         Ok(())
     }
@@ -1906,10 +1903,7 @@ fn decode_sequences_without_rle(
     }
 
     if br.bits_remaining() > 0 {
-        Err(format!(
-            "Extra bits remaining: {}",
-            br.bits_remaining()
-        ))
+        Err(format!("Extra bits remaining: {}", br.bits_remaining()))
     } else {
         Ok(())
     }
@@ -2028,10 +2022,9 @@ fn maybe_update_fse_tables(
             scratch.of_rle = Some(of_source[0]);
         }
         ModeType::Predefined => {
-            scratch.offsets.build_from_probabilities(
-                OF_DEFAULT_ACC_LOG,
-                &OFFSET_DEFAULT_DISTRIBUTION,
-            )?;
+            scratch
+                .offsets
+                .build_from_probabilities(OF_DEFAULT_ACC_LOG, &OFFSET_DEFAULT_DISTRIBUTION)?;
             scratch.of_rle = None;
         }
         ModeType::Repeat => { /* Nothing to do */ }
@@ -2056,10 +2049,9 @@ fn maybe_update_fse_tables(
             scratch.ml_rle = Some(ml_source[0]);
         }
         ModeType::Predefined => {
-            scratch.match_lengths.build_from_probabilities(
-                ML_DEFAULT_ACC_LOG,
-                &MATCH_LENGTH_DEFAULT_DISTRIBUTION,
-            )?;
+            scratch
+                .match_lengths
+                .build_from_probabilities(ML_DEFAULT_ACC_LOG, &MATCH_LENGTH_DEFAULT_DISTRIBUTION)?;
             scratch.ml_rle = None;
         }
         ModeType::Repeat => { /* Nothing to do */ }
@@ -2221,9 +2213,7 @@ fn decode_block_content(
 
             Ok(u64::from(header.decompressed_size))
         }
-        BlockType::Reserved => {
-            Err("Reserved block type encountered".to_string())
-        }
+        BlockType::Reserved => Err("Reserved block type encountered".to_string()),
         BlockType::Compressed => {
             decompress_block(header, workspace, source)?;
             Ok(u64::from(header.content_size))
@@ -2340,9 +2330,7 @@ impl FrameDecoder {
 
     fn reset(&mut self, source: &mut dyn std::io::Read) -> Result<(), FrameDecoderError> {
         let (frame_header, _header_size) = read_frame_header(source)?;
-        let window_size = frame_header
-            .window_size()
-            .map_err(FrameDecoderError::new)?;
+        let window_size = frame_header.window_size().map_err(FrameDecoderError::new)?;
 
         if window_size > MAXIMUM_ALLOWED_WINDOW_SIZE {
             return Err(FrameDecoderError::new(format!(
@@ -2427,7 +2415,7 @@ mod tests {
         // Frame descriptor: single_segment=1, no checksum, no dict, fcs_flag=0
         // So FCS field = 1 byte
         frame.push(0x20); // single_segment_flag set
-        // FCS = 5 (length of "hello")
+                          // FCS = 5 (length of "hello")
         frame.push(5);
         // Block header: last_block=1, type=raw(0), size=5
         // Encoding: bit0=last(1), bit1-2=type(0), bit3-20=size(5)
@@ -2449,7 +2437,7 @@ mod tests {
         frame.extend_from_slice(&ZSTD_MAGIC.to_le_bytes());
         frame.push(0x20); // single_segment_flag set
         frame.push(10); // FCS = 10
-        // Block header: last_block=1, type=RLE(1), size=10
+                        // Block header: last_block=1, type=RLE(1), size=10
         let bh = 1u32 | (1u32 << 1) | (10u32 << 3);
         frame.push((bh & 0xFF) as u8);
         frame.push(((bh >> 8) & 0xFF) as u8);

@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Read, Write, Seek, SeekFrom};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Default buffer size for buffered I/O (64 KiB).
@@ -54,10 +54,7 @@ impl FileHandle {
 
     /// Open an existing file for read/write access.
     pub fn open_readwrite(path: &Path) -> std::io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)?;
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
         Ok(Self {
             file: None,
             mode: Mode::Writer(BufWriter::with_capacity(DEFAULT_BUF_SIZE, file)),
@@ -73,9 +70,9 @@ impl FileHandle {
             Mode::ReadOnly(r) => Ok(r.into_inner()),
             Mode::Transitioning => {
                 // Use stashed file if available
-                self.file.take().ok_or_else(|| {
-                    std::io::Error::other("no file available")
-                })
+                self.file
+                    .take()
+                    .ok_or_else(|| std::io::Error::other("no file available"))
             }
         }
     }
@@ -231,7 +228,12 @@ impl MmapFileHandle {
         if end > self.mmap.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                format!("mmap read past end: offset={} len={} file_size={}", offset, len, self.mmap.len()),
+                format!(
+                    "mmap read past end: offset={} len={} file_size={}",
+                    offset,
+                    len,
+                    self.mmap.len()
+                ),
             ));
         }
         Ok(&self.mmap[start..end])

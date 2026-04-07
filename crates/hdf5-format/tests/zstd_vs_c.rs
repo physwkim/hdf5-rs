@@ -1,5 +1,5 @@
-use std::time::Instant;
 use std::process::Command;
+use std::time::Instant;
 
 fn bench_rust(data: &[u8], level: i32, iters: u32) -> (f64, f64, usize) {
     let compressed = hdf5_format::zstd::compress(data, level);
@@ -7,11 +7,15 @@ fn bench_rust(data: &[u8], level: i32, iters: u32) -> (f64, f64, usize) {
 
     let start = Instant::now();
     let mut c = Vec::new();
-    for _ in 0..iters { c = hdf5_format::zstd::compress(data, level); }
+    for _ in 0..iters {
+        c = hdf5_format::zstd::compress(data, level);
+    }
     let ct = start.elapsed().as_secs_f64() / iters as f64;
 
     let start = Instant::now();
-    for _ in 0..iters { let _ = hdf5_format::zstd::decompress(&c); }
+    for _ in 0..iters {
+        let _ = hdf5_format::zstd::decompress(&c);
+    }
     let dt = start.elapsed().as_secs_f64() / iters as f64;
 
     (ct, dt, c.len())
@@ -25,14 +29,18 @@ fn bench_c_zstd(data: &[u8], level: i32, iters: u32) -> (f64, f64, usize) {
     std::fs::write(tmp_in, data).unwrap();
 
     // Warmup
-    Command::new("zstd").args(["-f", &format!("-{}", level), tmp_in, "-o", tmp_out])
-        .output().unwrap();
+    Command::new("zstd")
+        .args(["-f", &format!("-{}", level), tmp_in, "-o", tmp_out])
+        .output()
+        .unwrap();
 
     // Compress
     let start = Instant::now();
     for _ in 0..iters {
-        Command::new("zstd").args(["-f", "-q", &format!("-{}", level), tmp_in, "-o", tmp_out])
-            .output().unwrap();
+        Command::new("zstd")
+            .args(["-f", "-q", &format!("-{}", level), tmp_in, "-o", tmp_out])
+            .output()
+            .unwrap();
     }
     let ct = start.elapsed().as_secs_f64() / iters as f64;
     let comp_size = std::fs::metadata(tmp_out).unwrap().len() as usize;
@@ -40,8 +48,10 @@ fn bench_c_zstd(data: &[u8], level: i32, iters: u32) -> (f64, f64, usize) {
     // Decompress
     let start = Instant::now();
     for _ in 0..iters {
-        Command::new("zstd").args(["-d", "-f", "-q", tmp_out, "-o", tmp_dec])
-            .output().unwrap();
+        Command::new("zstd")
+            .args(["-d", "-f", "-q", tmp_out, "-o", tmp_dec])
+            .output()
+            .unwrap();
     }
     let dt = start.elapsed().as_secs_f64() / iters as f64;
 
@@ -62,21 +72,46 @@ fn rust_vs_c_zstd() {
 
     let datasets: Vec<(&str, Vec<u8>)> = vec![
         ("zeros_1M", vec![0u8; 1_048_576]),
-        ("text_1M", b"The quick brown fox jumps over the lazy dog. Hello world! ".repeat(18000)),
-        ("f64_seq_1M", (0..131072u64).flat_map(|i| (i as f64).to_le_bytes()).collect()),
-        ("mixed_1M", (0..262144u32).flat_map(|i| {
-            if i % 4 == 0 { [0u8; 4] } else { i.to_le_bytes() }
-        }).collect()),
+        (
+            "text_1M",
+            b"The quick brown fox jumps over the lazy dog. Hello world! ".repeat(18000),
+        ),
+        (
+            "f64_seq_1M",
+            (0..131072u64)
+                .flat_map(|i| (i as f64).to_le_bytes())
+                .collect(),
+        ),
+        (
+            "mixed_1M",
+            (0..262144u32)
+                .flat_map(|i| {
+                    if i % 4 == 0 {
+                        [0u8; 4]
+                    } else {
+                        i.to_le_bytes()
+                    }
+                })
+                .collect(),
+        ),
     ];
 
     let iters = 5;
 
     eprintln!("\n{:=<110}", "");
-    eprintln!("{:<12} {:>5} │ {:>8} {:>7} {:>7} │ {:>8} {:>7} {:>7} │ {:>6} {:>6}",
-        "Dataset", "Level",
-        "C_Size", "C_Comp", "C_Dec",
-        "Rs_Size", "Rs_Comp", "Rs_Dec",
-        "Ratio", "Speed");
+    eprintln!(
+        "{:<12} {:>5} │ {:>8} {:>7} {:>7} │ {:>8} {:>7} {:>7} │ {:>6} {:>6}",
+        "Dataset",
+        "Level",
+        "C_Size",
+        "C_Comp",
+        "C_Dec",
+        "Rs_Size",
+        "Rs_Comp",
+        "Rs_Dec",
+        "Ratio",
+        "Speed"
+    );
     eprintln!("{:=<110}", "");
 
     for (name, data) in &datasets {

@@ -41,13 +41,15 @@ pub fn compress(data: &[u8], level: i32) -> Vec<u8> {
     #[cfg(feature = "parallel")]
     let compressed_blocks: Vec<Option<Vec<u8>>> = {
         use rayon::prelude::*;
-        blocks.par_iter()
+        blocks
+            .par_iter()
             .map(|block| compress_block(block, &params))
             .collect()
     };
 
     #[cfg(not(feature = "parallel"))]
-    let compressed_blocks: Vec<Option<Vec<u8>>> = blocks.iter()
+    let compressed_blocks: Vec<Option<Vec<u8>>> = blocks
+        .iter()
         .map(|block| compress_block(block, &params))
         .collect();
 
@@ -117,17 +119,14 @@ fn write_frame_header(out: &mut Vec<u8>, content_size: u64) {
 // =========================================================================
 
 fn write_raw_block(out: &mut Vec<u8>, data: &[u8], is_last: bool) {
-    let header = (is_last as u32)
-        | ((BLOCK_TYPE_RAW as u32) << 1)
-        | ((data.len() as u32) << 3);
+    let header = (is_last as u32) | ((BLOCK_TYPE_RAW as u32) << 1) | ((data.len() as u32) << 3);
     out.extend_from_slice(&header.to_le_bytes()[..3]);
     out.extend_from_slice(data);
 }
 
 fn write_compressed_block(out: &mut Vec<u8>, compressed: &[u8], is_last: bool) {
-    let header = (is_last as u32)
-        | ((BLOCK_TYPE_COMPRESSED as u32) << 1)
-        | ((compressed.len() as u32) << 3);
+    let header =
+        (is_last as u32) | ((BLOCK_TYPE_COMPRESSED as u32) << 1) | ((compressed.len() as u32) << 3);
     out.extend_from_slice(&header.to_le_bytes()[..3]);
     out.extend_from_slice(compressed);
 }
@@ -141,8 +140,8 @@ fn write_compressed_block(out: &mut Vec<u8>, compressed: &[u8], is_last: bool) {
 /// After repeat offset resolution, it becomes an "offset value" for encoding.
 struct Sequence {
     ll: u32,
-    off: u32,  // raw back-reference distance
-    ml: u32,   // actual match length (>= ZSTD_MINMATCH)
+    off: u32, // raw back-reference distance
+    ml: u32,  // actual match length (>= ZSTD_MINMATCH)
 }
 
 /// Offset value after repeat-offset resolution.
@@ -163,10 +162,26 @@ struct MatchParams {
 impl MatchParams {
     fn from_level(level: i32) -> Self {
         match level {
-            0..=2 => Self { hash_log: 14, lazy_depth: 0, search_depth: 4 },
-            3..=5 => Self { hash_log: 15, lazy_depth: 1, search_depth: 16 },
-            6..=8 => Self { hash_log: 16, lazy_depth: 1, search_depth: 64 },
-            _     => Self { hash_log: 17, lazy_depth: 1, search_depth: 128 },
+            0..=2 => Self {
+                hash_log: 14,
+                lazy_depth: 0,
+                search_depth: 4,
+            },
+            3..=5 => Self {
+                hash_log: 15,
+                lazy_depth: 1,
+                search_depth: 16,
+            },
+            6..=8 => Self {
+                hash_log: 16,
+                lazy_depth: 1,
+                search_depth: 64,
+            },
+            _ => Self {
+                hash_log: 17,
+                lazy_depth: 1,
+                search_depth: 128,
+            },
         }
     }
 }
@@ -268,7 +283,11 @@ fn resolve_repeat_offsets(sequences: &[Sequence]) -> Vec<EncodedSequence> {
             }
         }
 
-        out.push(EncodedSequence { ll: seq.ll, of_value, ml: seq.ml });
+        out.push(EncodedSequence {
+            ll: seq.ll,
+            of_value,
+            ml: seq.ml,
+        });
     }
 
     out
@@ -293,7 +312,14 @@ fn find_matches(data: &[u8], params: &MatchParams) -> Vec<Sequence> {
 
     while ip + ZSTD_MINMATCH < data.len() {
         // Try to find a match at current position
-        let best = find_best_at(data, ip, &hash_table, &chain, hash_mask, params.search_depth);
+        let best = find_best_at(
+            data,
+            ip,
+            &hash_table,
+            &chain,
+            hash_mask,
+            params.search_depth,
+        );
 
         if let Some((offset, match_len)) = best {
             let mut final_off = offset;
@@ -303,7 +329,14 @@ fn find_matches(data: &[u8], params: &MatchParams) -> Vec<Sequence> {
             // Lazy matching: check if next position gives a better match
             if params.lazy_depth >= 1 && ip + 1 + ZSTD_MINMATCH < data.len() {
                 insert_hash(&mut hash_table, &mut chain, data, ip, hash_mask);
-                if let Some((off2, len2)) = find_best_at(data, ip + 1, &hash_table, &chain, hash_mask, params.search_depth) {
+                if let Some((off2, len2)) = find_best_at(
+                    data,
+                    ip + 1,
+                    &hash_table,
+                    &chain,
+                    hash_mask,
+                    params.search_depth,
+                ) {
                     if len2 > final_len + 1 {
                         final_off = off2;
                         final_len = len2;
@@ -313,10 +346,17 @@ fn find_matches(data: &[u8], params: &MatchParams) -> Vec<Sequence> {
             }
 
             let ll = (final_ip - anchor) as u32;
-            sequences.push(Sequence { ll, off: final_off as u32, ml: final_len as u32 });
+            sequences.push(Sequence {
+                ll,
+                off: final_off as u32,
+                ml: final_len as u32,
+            });
 
             // Insert all positions within the match for future matching
-            for p in ip..std::cmp::min(final_ip + final_len, data.len().saturating_sub(ZSTD_MINMATCH)) {
+            for p in ip..std::cmp::min(
+                final_ip + final_len,
+                data.len().saturating_sub(ZSTD_MINMATCH),
+            ) {
                 insert_hash(&mut hash_table, &mut chain, data, p, hash_mask);
             }
 
@@ -334,7 +374,9 @@ fn find_matches(data: &[u8], params: &MatchParams) -> Vec<Sequence> {
 /// Insert position into hash chain.
 #[inline]
 fn insert_hash(hash_table: &mut [u32], chain: &mut [u32], data: &[u8], pos: usize, mask: u32) {
-    if pos + 4 > data.len() { return; }
+    if pos + 4 > data.len() {
+        return;
+    }
     let h = hash4(&data[pos..], mask);
     chain[pos] = hash_table[h];
     hash_table[h] = pos as u32;
@@ -342,19 +384,28 @@ fn insert_hash(hash_table: &mut [u32], chain: &mut [u32], data: &[u8], pos: usiz
 
 /// Find the best match at `pos` by walking the hash chain.
 fn find_best_at(
-    data: &[u8], pos: usize,
-    hash_table: &[u32], chain: &[u32],
-    mask: u32, max_depth: u32,
+    data: &[u8],
+    pos: usize,
+    hash_table: &[u32],
+    chain: &[u32],
+    mask: u32,
+    max_depth: u32,
 ) -> Option<(usize, usize)> {
-    if pos + ZSTD_MINMATCH > data.len() { return None; }
+    if pos + ZSTD_MINMATCH > data.len() {
+        return None;
+    }
     let h = hash4(&data[pos..], mask);
     let mut candidate = hash_table[h] as usize;
     let mut best_len = ZSTD_MINMATCH - 1;
     let mut best_off = 0;
 
     for _ in 0..max_depth {
-        if candidate >= pos || pos - candidate > (1 << 24) { break; }
-        if candidate + ZSTD_MINMATCH > data.len() { break; }
+        if candidate >= pos || pos - candidate > (1 << 24) {
+            break;
+        }
+        if candidate + ZSTD_MINMATCH > data.len() {
+            break;
+        }
 
         // Quick 4-byte check
         if data[candidate..candidate + 4] == data[pos..pos + 4] {
@@ -366,11 +417,17 @@ fn find_best_at(
         }
 
         let next = chain[candidate] as usize;
-        if next >= candidate { break; }
+        if next >= candidate {
+            break;
+        }
         candidate = next;
     }
 
-    if best_len >= ZSTD_MINMATCH { Some((best_off, best_len)) } else { None }
+    if best_len >= ZSTD_MINMATCH {
+        Some((best_off, best_len))
+    } else {
+        None
+    }
 }
 
 /// Fast common prefix length using 8-byte chunks.
@@ -379,14 +436,16 @@ fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
     let max = std::cmp::min(a.len(), b.len());
     let mut i = 0;
     while i + 8 <= max {
-        let va = u64::from_le_bytes(a[i..i+8].try_into().unwrap());
-        let vb = u64::from_le_bytes(b[i..i+8].try_into().unwrap());
+        let va = u64::from_le_bytes(a[i..i + 8].try_into().unwrap());
+        let vb = u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
         if va != vb {
             return i + ((va ^ vb).trailing_zeros() / 8) as usize;
         }
         i += 8;
     }
-    while i < max && a[i] == b[i] { i += 1; }
+    while i < max && a[i] == b[i] {
+        i += 1;
+    }
     i
 }
 
@@ -408,17 +467,23 @@ fn encode_literals_huffman(literals: &[u8]) -> Option<Vec<u8>> {
     let mut max_sym = 0u8;
     for &b in literals {
         counts[b as usize] += 1;
-        if b > max_sym { max_sym = b; }
+        if b > max_sym {
+            max_sym = b;
+        }
     }
     let n_used = counts.iter().filter(|&&c| c > 0).count();
-    if n_used < 2 { return None; }
+    if n_used < 2 {
+        return None;
+    }
 
     // Build length-limited Huffman (max 11 bits)
     let (codes, max_bits) = build_huffman_codes(&counts, max_sym as usize)?;
 
     // Encode tree description (weights packed as 4-bit pairs)
     let tree_desc = encode_huffman_tree(&codes, max_bits, max_sym as usize);
-    if tree_desc.is_empty() { return None; }
+    if tree_desc.is_empty() {
+        return None;
+    }
 
     // Encode streams: single stream for < 1KB, 4 streams for >= 1KB
     let use_4 = literals.len() >= 1024;
@@ -458,58 +523,163 @@ fn encode_literals_huffman(literals: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Build canonical Huffman codes, max 11 bits. Returns None if can't build valid codes.
+/// Build Huffman codes using the C zstd method:
+/// 1. Sort symbols by count
+/// 2. Build binary tree (classic Huffman)
+/// 3. Clamp to MAX_BITS using HUF_setMaxHeight
+/// 4. Generate canonical codes
 fn build_huffman_codes(counts: &[u32; 256], max_sym: usize) -> Option<([(u32, u8); 256], u8)> {
     const MAX_BITS: u8 = 11;
+
     let mut syms: Vec<(u32, u8)> = (0..=max_sym)
         .filter(|&s| counts[s] > 0)
         .map(|s| (counts[s], s as u8))
         .collect();
-    syms.sort();
+    syms.sort_by(|a, b| b.0.cmp(&a.0)); // descending by count (C convention)
     let n = syms.len();
-    if n < 2 { return None; }
-
-    // Assign lengths from Shannon entropy, clamp to [1, MAX_BITS]
-    let total: f64 = syms.iter().map(|&(c, _)| c as f64).sum();
-    let mut lengths = [0u8; 256];
-    for &(freq, sym) in &syms {
-        let p = freq as f64 / total;
-        lengths[sym as usize] = (-p.log2()).ceil().clamp(1.0, MAX_BITS as f64) as u8;
+    if n < 2 {
+        return None;
     }
 
-    // Fix Kraft inequality iteratively
-    for _ in 0..1000 {
-        let kraft: i64 = (0..256).filter(|&s| lengths[s] > 0)
-            .map(|s| 1i64 << (MAX_BITS - lengths[s])).sum();
-        let target = 1i64 << MAX_BITS;
-        if kraft == target { break; }
-        if kraft > target {
-            // Over-full: lengthen least frequent symbol
-            for &(_, sym) in &syms {
-                if lengths[sym as usize] < MAX_BITS {
-                    lengths[sym as usize] += 1;
+    // --- Step 1: Build Huffman tree ---
+    // Nodes: [0..n) = leaf nodes (symbols), [n..2n-1) = internal nodes
+    let mut node_count = vec![0u64; 2 * n];
+    let mut node_parent = vec![0u32; 2 * n];
+    let mut node_nbits = vec![0u8; 2 * n];
+
+    for i in 0..n {
+        node_count[i] = syms[i].0 as u64;
+    }
+
+    let mut low_sym = n as i32 - 1; // pointer into leaf nodes (right to left)
+    let mut low_node = n; // pointer into internal nodes (left to right)
+    let mut node_nb = n; // next internal node to create
+
+    // Create first internal node
+    if n >= 2 {
+        node_count[node_nb] = node_count[low_sym as usize] + node_count[(low_sym - 1) as usize];
+        node_parent[low_sym as usize] = node_nb as u32;
+        node_parent[(low_sym - 1) as usize] = node_nb as u32;
+        node_nb += 1;
+        low_sym -= 2;
+    }
+
+    let _node_root = node_nb + low_sym as usize; // not exactly right for general case
+                                                 // Fill remaining internal nodes with large counts
+    for i in node_nb..2 * n {
+        node_count[i] = u64::MAX / 2;
+    }
+
+    while node_nb < 2 * n - 1 {
+        let n1 = if low_sym >= 0 && node_count[low_sym as usize] < node_count[low_node] {
+            let r = low_sym as usize;
+            low_sym -= 1;
+            r
+        } else if low_node < node_nb {
+            let r = low_node;
+            low_node += 1;
+            r
+        } else {
+            break;
+        };
+
+        let n2 = if low_sym >= 0 && node_count[low_sym as usize] < node_count[low_node] {
+            let r = low_sym as usize;
+            low_sym -= 1;
+            r
+        } else if low_node < node_nb {
+            let r = low_node;
+            low_node += 1;
+            r
+        } else {
+            break;
+        };
+
+        node_count[node_nb] = node_count[n1] + node_count[n2];
+        node_parent[n1] = node_nb as u32;
+        node_parent[n2] = node_nb as u32;
+        node_nb += 1;
+    }
+
+    let root = node_nb - 1;
+
+    // --- Step 2: Assign bit lengths from tree ---
+    node_nbits[root] = 0;
+    for i in (n..root).rev() {
+        node_nbits[i] = node_nbits[node_parent[i] as usize] + 1;
+    }
+    for i in 0..n {
+        node_nbits[i] = node_nbits[node_parent[i] as usize] + 1;
+    }
+
+    // --- Step 3: Clamp to MAX_BITS (HUF_setMaxHeight) ---
+    let largest_bits = *node_nbits[..n].iter().max().unwrap_or(&0);
+    if largest_bits > MAX_BITS {
+        let base_cost = 1i32 << (largest_bits - MAX_BITS);
+        let mut total_cost = 0i32;
+
+        // Clamp all > MAX_BITS to MAX_BITS, accumulate cost
+        for i in 0..n {
+            if node_nbits[i] > MAX_BITS {
+                total_cost += base_cost - (1 << (largest_bits - node_nbits[i]));
+                node_nbits[i] = MAX_BITS;
+            }
+        }
+
+        // Normalize cost
+        total_cost >>= largest_bits - MAX_BITS;
+
+        // Repay cost by shortening symbols (making some codes shorter)
+        while total_cost > 0 {
+            // Find a symbol with nbits < MAX_BITS that can absorb cost
+            let mut found = false;
+            for nb in (1..MAX_BITS).rev() {
+                for i in 0..n {
+                    if node_nbits[i] == nb {
+                        node_nbits[i] += 1; // lengthen by 1 → saves 2^(MAX_BITS-nb-1)
+                        total_cost -= 1 << (MAX_BITS - nb - 1);
+                        if total_cost <= 0 {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if found || total_cost <= 0 {
                     break;
                 }
             }
-        } else {
-            // Under-full: shorten most frequent symbol
-            for &(_, sym) in syms.iter().rev() {
-                if lengths[sym as usize] > 1 {
-                    lengths[sym as usize] -= 1;
-                    break;
-                }
+            if !found {
+                break;
             }
         }
     }
 
-    // Verify Kraft
-    let kraft: u64 = (0..256).filter(|&s| lengths[s] > 0)
-        .map(|s| 1u64 << (MAX_BITS - lengths[s])).sum();
-    if !kraft.is_power_of_two() { return None; }
+    // --- Step 4: Build canonical codes from lengths ---
+    let mut lengths = [0u8; 256];
+    for i in 0..n {
+        lengths[syms[i].1 as usize] = node_nbits[i];
+    }
 
     let max_bits = *lengths.iter().max().unwrap_or(&0);
+    if max_bits == 0 {
+        return None;
+    }
+
+    // Verify Kraft
+    let kraft: u64 = (0..256)
+        .filter(|&s| lengths[s] > 0)
+        .map(|s| 1u64 << (max_bits - lengths[s]))
+        .sum();
+    if !kraft.is_power_of_two() {
+        return None;
+    }
+
     let mut bl_count = [0u32; 16];
-    for &l in &lengths { if l > 0 { bl_count[l as usize] += 1; } }
+    for &l in &lengths {
+        if l > 0 {
+            bl_count[l as usize] += 1;
+        }
+    }
 
     let mut next_code = [0u32; 16];
     for bits in 1..=max_bits as usize {
@@ -528,16 +698,32 @@ fn build_huffman_codes(counts: &[u32; 256], max_sym: usize) -> Option<([(u32, u8
 }
 
 fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -> Vec<u8> {
-    if max_bits == 0 { return vec![]; }
+    if max_bits == 0 {
+        return vec![];
+    }
     let mut weights: Vec<u8> = (0..=max_sym)
-        .map(|s| if codes[s].1 > 0 { max_bits + 1 - codes[s].1 } else { 0 })
+        .map(|s| {
+            if codes[s].1 > 0 {
+                max_bits + 1 - codes[s].1
+            } else {
+                0
+            }
+        })
         .collect();
-    while weights.last() == Some(&0) && weights.len() > 1 { weights.pop(); }
-    if !weights.is_empty() { weights.pop(); } // last weight is implicit
-    if weights.is_empty() || weights.len() > 255 { return vec![]; }
+    while weights.last() == Some(&0) && weights.len() > 1 {
+        weights.pop();
+    }
+    if !weights.is_empty() {
+        weights.pop();
+    } // last weight is implicit
+    if weights.is_empty() || weights.len() > 255 {
+        return vec![];
+    }
 
     // Check all weights fit in 4 bits
-    if weights.iter().any(|&w| w > 12) { return vec![]; }
+    if weights.iter().any(|&w| w > 12) {
+        return vec![];
+    }
 
     let num = weights.len();
 
@@ -553,11 +739,27 @@ fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -
         desc
     } else {
         // >128 weights: FSE-compressed 2-stream interleaved encoding
-        match encode_weights_fse(&weights) {
+        let fse_result = encode_weights_fse(&weights);
+        #[cfg(test)]
+        if let Some(ref c) = fse_result {
+            eprintln!(
+                "FSE weight: {} weights -> {} bytes (limit {})",
+                num,
+                c.len(),
+                num.div_ceil(2)
+            );
+        } else {
+            eprintln!(
+                "FSE weight: encode_weights_fse returned None for {} weights",
+                num
+            );
+        }
+        match fse_result {
             Some(compressed) if compressed.len() < 127 && compressed.len() < num.div_ceil(2) => {
                 // Verify: try decoding the FSE weights to check roundtrip
                 let header_byte = compressed.len() as u8;
-                let verify = crate::zstd::decode::decode_huf_weights_from_fse(&compressed, header_byte);
+                let verify =
+                    crate::zstd::decode::decode_huf_weights_from_fse(&compressed, header_byte);
                 match verify {
                     Ok(decoded_weights) if decoded_weights == weights => {
                         let mut desc = Vec::with_capacity(1 + compressed.len());
@@ -565,7 +767,25 @@ fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -
                         desc.extend_from_slice(&compressed);
                         desc
                     }
-                    _ => vec![], // FSE roundtrip mismatch, fall back to raw
+                    Ok(_d) => {
+                        #[cfg(test)]
+                        eprintln!(
+                            "FSE weight mismatch: {} encoded, {} decoded, first diff at {}",
+                            weights.len(),
+                            _d.len(),
+                            weights
+                                .iter()
+                                .zip(_d.iter())
+                                .position(|(a, b)| a != b)
+                                .unwrap_or(9999)
+                        );
+                        vec![]
+                    }
+                    Err(_e) => {
+                        #[cfg(test)]
+                        eprintln!("FSE weight decode error: {}", _e);
+                        vec![]
+                    }
                 }
             }
             _ => vec![],
@@ -583,8 +803,15 @@ fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -
 fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
     let mut counts = [0u32; 13];
     let mut max_w = 0u8;
-    for &w in weights { counts[w as usize] += 1; if w > max_w { max_w = w; } }
-    if max_w == 0 { return None; }
+    for &w in weights {
+        counts[w as usize] += 1;
+        if w > max_w {
+            max_w = w;
+        }
+    }
+    if max_w == 0 {
+        return None;
+    }
 
     let table_log = 6u32;
     let table_size = 1u32 << table_log;
@@ -594,16 +821,28 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
     let mut norm = [0i16; 13];
     let mut dist = 0u32;
     for s in 0..=max_w as usize {
-        if counts[s] == 0 { continue; }
-        norm[s] = std::cmp::max(1, (counts[s] as u64 * table_size as u64 / total as u64) as i16);
+        if counts[s] == 0 {
+            continue;
+        }
+        norm[s] = std::cmp::max(
+            1,
+            (counts[s] as u64 * table_size as u64 / total as u64) as i16,
+        );
         dist += norm[s] as u32;
     }
     while dist > table_size {
-        for s in 0..=max_w as usize { if norm[s] > 1 { norm[s] -= 1; dist -= 1; break; } }
+        for s in 0..=max_w as usize {
+            if norm[s] > 1 {
+                norm[s] -= 1;
+                dist -= 1;
+                break;
+            }
+        }
     }
     while dist < table_size {
         let best = (0..=max_w as usize).max_by_key(|&s| counts[s]).unwrap_or(0);
-        norm[best] += 1; dist += 1;
+        norm[best] += 1;
+        dist += 1;
     }
 
     let fse = super::fse::FseCTable::build(&norm, max_w as usize, table_log);
@@ -621,7 +860,9 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
     let mut counter = 0u32;
 
     for s in 0..=max_w as usize {
-        if counter >= prob_sum { break; }
+        if counter >= prob_sum {
+            break;
+        }
         let prob = norm[s] as i32;
         let value = (prob + 1) as u32; // prob=-1 → value=0, prob=0 → value=1, etc.
 
@@ -646,13 +887,22 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
             bp += bits_to_read;
         }
 
-        while bp >= 8 { hdr.push(bb as u8); bb >>= 8; bp -= 8; }
+        while bp >= 8 {
+            hdr.push(bb as u8);
+            bb >>= 8;
+            bp -= 8;
+        }
 
-        if prob > 0 { counter += prob as u32; }
-        else if prob == -1 { counter += 1; }
+        if prob > 0 {
+            counter += prob as u32;
+        } else if prob == -1 {
+            counter += 1;
+        }
         // prob == 0 doesn't contribute to counter
     }
-    if bp > 0 { hdr.push(bb as u8); }
+    if bp > 0 {
+        hdr.push(bb as u8);
+    }
 
     // --- 2-stream interleaved backward bitstream ---
     let _n = weights.len();
@@ -682,33 +932,57 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
     let stream1: Vec<u8> = weights.iter().step_by(2).copied().collect();
     let stream2: Vec<u8> = weights.iter().skip(1).step_by(2).copied().collect();
 
-    // Init states from last symbols of each stream
-    let mut st1 = fse.init_state(*stream1.last().unwrap() as usize);
-    let mut st2 = fse.init_state(*stream2.last().unwrap() as usize);
+    // Init states: decoder outputs stream1[0] first, so init with that symbol.
+    // In backward encoding, init is the LAST thing written → FIRST thing read.
+    // encode_symbol processes stream1[len1-2]..stream1[1] (skipping [0] and last).
+    // The last symbol (stream1.last()) gets its state from the final encode_symbol.
+    // The first symbol (stream1[0]) is the init state — decoded first.
+    // BUT: the loop processes down to index 0, so actually we init with stream1.last()
+    // and the loop's final encode_symbol at i=0 produces the state that carries stream1[0].
+    // Wait... let me re-think.
+    //
+    // FSE backward encoding protocol:
+    // 1. init_state(last_symbol) → set initial state for that symbol
+    // 2. for each symbol from second-to-last down to first:
+    //    encode_symbol(state, symbol) → output bits, update state
+    // 3. flush final state
+    //
+    // Decoder:
+    // 1. read init state → state
+    // 2. output state.symbol (= LAST symbol from encoding, = FIRST output from decoder)
+    // 3. read update bits → new state, output new state.symbol
+    //    (= second-to-last symbol from encoding, = second output)
+    //
+    // So init_state(last_symbol) is correct! The decoder's first output IS the last
+    // symbol encoded. But we process stream1 elements as: last → init, then
+    // second-to-last → encode, ..., first → encode.
+    // Decoder outputs: last (from init), second-to-last, ..., first.
+    // That means decoder output = REVERSED stream1.
+    //
+    // But we want decoder to output stream1 in FORWARD order!
+    // So we need to REVERSE the encoding order:
+    // init_state(stream1[0]), encode stream1[1], stream1[2], ..., stream1[last]
+    //
+    // That way decoder outputs: stream1[0] (init), stream1[1], ..., stream1[last]
+    let mut st1 = fse.init_state(stream1[0] as usize);
+    let mut st2 = fse.init_state(stream2[0] as usize);
 
     // Encode in reverse order, alternating stream2 then stream1
     // (because decoder reads stream1 first after init)
     let len1 = stream1.len();
     let len2 = stream2.len();
 
-    // Process from second-to-last down to first
-    // Decoder processes: s1[0], s2[0], s1[1], s2[1], ...
-    // Last s1 and s2 are init'd, not update'd.
-    // So encode s1[len1-2]..s1[0] and s2[len2-2]..s2[0]
-
-    // Interleave: for each pair index going backward
+    // Backward encoding: init with [0], encode [last] first → [1] last.
+    // Decoder reads: init([0]) → update with [1] bits → update with [2] → ... → [last].
     let max_idx = std::cmp::max(len1, len2);
-    for i in (0..max_idx - 1).rev() {
-        // stream2 update comes before stream1 in bitstream
-        // (decoder reads s1 update first, then s2 update)
-        // backward → write s2 first (will be read second)
-        if i < len2 - 1 {
+    for i in (1..max_idx).rev() {
+        if i < len2 {
             let (bits, nb, ns) = fse.encode_symbol(st2, stream2[i] as usize);
             bw.add_bits(bits as u64, nb);
             bw.flush_bits();
             st2 = ns;
         }
-        if i < len1 - 1 {
+        if i < len1 {
             let (bits, nb, ns) = fse.encode_symbol(st1, stream1[i] as usize);
             bw.add_bits(bits as u64, nb);
             bw.flush_bits();
@@ -716,11 +990,12 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
         }
     }
 
-    // Write init states: dec2 state then dec1 state
-    // (dec1 is read first from bitstream front → written last)
-    bw.add_bits(st2 as u64, table_log);
+    // Write init states as decode table indices (state - table_size).
+    // dec1 is read first → written last (backward bitstream convention).
+    let table_size = 1u32 << table_log;
+    bw.add_bits((st2 - table_size) as u64, table_log);
     bw.flush_bits();
-    bw.add_bits(st1 as u64, table_log);
+    bw.add_bits((st1 - table_size) as u64, table_log);
     bw.flush_bits();
 
     let bitstream = bw.finish();
@@ -735,7 +1010,9 @@ fn encode_huf_1stream(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
     // Encode symbols in reverse (backward bitstream convention)
     for &sym in data.iter().rev() {
         let (code, nb) = codes[sym as usize];
-        if nb == 0 { continue; }
+        if nb == 0 {
+            continue;
+        }
         bw.add_bits(code as u64, nb as u32);
         bw.flush_bits();
     }
@@ -744,15 +1021,26 @@ fn encode_huf_1stream(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
 
 fn encode_huf_4streams(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
     let q = data.len().div_ceil(4);
-    let ends = [q, std::cmp::min(q*2, data.len()), std::cmp::min(q*3, data.len()), data.len()];
+    let ends = [
+        q,
+        std::cmp::min(q * 2, data.len()),
+        std::cmp::min(q * 3, data.len()),
+        data.len(),
+    ];
     let starts = [0, q, ends[1], ends[2]];
 
-    let c: Vec<Vec<u8>> = (0..4).map(|i| encode_huf_1stream(&data[starts[i]..ends[i]], codes)).collect();
+    let c: Vec<Vec<u8>> = (0..4)
+        .map(|i| encode_huf_1stream(&data[starts[i]..ends[i]], codes))
+        .collect();
 
     let mut out = Vec::with_capacity(6 + c.iter().map(|v| v.len()).sum::<usize>());
     // Jump table: sizes of first 3 streams (u16 LE each)
-    for i in 0..3 { out.extend_from_slice(&(c[i].len() as u16).to_le_bytes()); }
-    for stream in &c { out.extend_from_slice(stream); }
+    for i in 0..3 {
+        out.extend_from_slice(&(c[i].len() as u16).to_le_bytes());
+    }
+    for stream in &c {
+        out.extend_from_slice(stream);
+    }
     out
 }
 
@@ -797,7 +1085,9 @@ fn encode_sequences_section(out: &mut Vec<u8>, sequences: &[EncodedSequence]) {
         out.extend_from_slice(&((nb_seq - 0x7F00) as u16).to_le_bytes());
     }
 
-    if nb_seq == 0 { return; }
+    if nb_seq == 0 {
+        return;
+    }
 
     // Symbol compression modes: all predefined
     out.push(0x00);
@@ -806,7 +1096,9 @@ fn encode_sequences_section(out: &mut Vec<u8>, sequences: &[EncodedSequence]) {
     let ll_table = super::fse::FseCTable::build(&LL_DEFAULT_NORM, MAX_LL, LL_DEFAULT_NORM_LOG);
     let ml_table = super::fse::FseCTable::build(&ML_DEFAULT_NORM, MAX_ML, ML_DEFAULT_NORM_LOG);
     let of_table = super::fse::FseCTable::build(
-        &OF_DEFAULT_NORM, OF_DEFAULT_NORM.len() - 1, OF_DEFAULT_NORM_LOG,
+        &OF_DEFAULT_NORM,
+        OF_DEFAULT_NORM.len() - 1,
+        OF_DEFAULT_NORM_LOG,
     );
 
     // Convert sequences to codes + extra bit values
@@ -829,14 +1121,24 @@ fn encode_sequences_section(out: &mut Vec<u8>, sequences: &[EncodedSequence]) {
         off_codes_v.push(ofc);
         ll_values.push(seq.ll - LL_BASE[llc as usize]);
         ml_values.push(seq.ml - ML_BASE[mlc as usize]);
-        off_values.push(if ofc > 0 { seq.of_value - (1u32 << ofc) } else { 0 });
+        off_values.push(if ofc > 0 {
+            seq.of_value - (1u32 << ofc)
+        } else {
+            0
+        });
     }
 
     // Encode with the exact C-compatible FSE sequence encoder
     let bitstream = super::fse::encode_sequences(
-        &ll_table, &of_table, &ml_table,
-        &ll_codes_v, &off_codes_v, &ml_codes_v,
-        &ll_values, &ml_values, &off_values,
+        &ll_table,
+        &of_table,
+        &ml_table,
+        &ll_codes_v,
+        &off_codes_v,
+        &ml_codes_v,
+        &ll_values,
+        &ml_values,
+        &off_values,
     );
     out.extend_from_slice(&bitstream);
 }
@@ -870,7 +1172,9 @@ mod tests {
 
     #[test]
     fn compress_real_data() {
-        let data: Vec<u8> = (0..1024u32).flat_map(|i| (i as f32).to_le_bytes()).collect();
+        let data: Vec<u8> = (0..1024u32)
+            .flat_map(|i| (i as f32).to_le_bytes())
+            .collect();
         let compressed = compress(&data, 1);
         assert_eq!(&compressed[..4], &ZSTD_MAGIC.to_le_bytes());
     }
@@ -880,8 +1184,16 @@ mod tests {
     fn roundtrip_self_contained() {
         let test_cases: Vec<(&str, Vec<u8>)> = vec![
             ("zeros", vec![0u8; 4096]),
-            ("sequential", (0..4096u32).flat_map(|i| i.to_le_bytes()).collect()),
-            ("f32_data", (0..256u32).flat_map(|i| (i as f32 * 1.5).to_le_bytes()).collect()),
+            (
+                "sequential",
+                (0..4096u32).flat_map(|i| i.to_le_bytes()).collect(),
+            ),
+            (
+                "f32_data",
+                (0..256u32)
+                    .flat_map(|i| (i as f32 * 1.5).to_le_bytes())
+                    .collect(),
+            ),
             ("repetitive", b"hello world! ".repeat(100)),
             ("small", b"abc".to_vec()),
         ];
@@ -896,4 +1208,3 @@ mod tests {
         }
     }
 }
-

@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 use hdf5_format::messages::attribute::AttributeMessage;
 
 use crate::error::{Hdf5Error, Result};
-use crate::file::{H5FileInner, SharedInner, borrow_inner_mut, clone_inner};
+use crate::file::{borrow_inner_mut, clone_inner, H5FileInner, SharedInner};
 use crate::types::VarLenUnicode;
 
 /// A handle to an HDF5 attribute.
@@ -41,11 +41,7 @@ pub struct H5Attribute {
 
 impl H5Attribute {
     /// Create a read-mode attribute handle with cached data.
-    pub(crate) fn new_reader(
-        file_inner: SharedInner,
-        name: String,
-        data: Vec<u8>,
-    ) -> Self {
+    pub(crate) fn new_reader(file_inner: SharedInner, name: String, data: Vec<u8>) -> Self {
         Self {
             file_inner,
             ds_index: usize::MAX,
@@ -96,14 +92,8 @@ impl H5Attribute {
     /// ```
     pub fn write_numeric<T: crate::types::H5Type>(&self, value: &T) -> Result<()> {
         let es = T::element_size();
-        let raw = unsafe {
-            std::slice::from_raw_parts(value as *const T as *const u8, es)
-        };
-        let attr_msg = AttributeMessage::scalar_numeric(
-            &self.name,
-            T::hdf5_type(),
-            raw.to_vec(),
-        );
+        let raw = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, es) };
+        let attr_msg = AttributeMessage::scalar_numeric(&self.name, T::hdf5_type(), raw.to_vec());
 
         let mut inner = borrow_inner_mut(&self.file_inner);
         match &mut *inner {
@@ -128,22 +118,21 @@ impl H5Attribute {
     /// let val: f64 = attr.read_numeric().unwrap();
     /// ```
     pub fn read_numeric<T: crate::types::H5Type>(&self) -> Result<T> {
-        let data = self.read_data.as_ref().ok_or_else(|| {
-            Hdf5Error::InvalidState("attribute has no read data".into())
-        })?;
+        let data = self
+            .read_data
+            .as_ref()
+            .ok_or_else(|| Hdf5Error::InvalidState("attribute has no read data".into()))?;
         let es = T::element_size();
         if data.len() < es {
             return Err(Hdf5Error::TypeMismatch(format!(
-                "attribute data {} bytes, need {} for type", data.len(), es
+                "attribute data {} bytes, need {} for type",
+                data.len(),
+                es
             )));
         }
         unsafe {
             let mut val = std::mem::MaybeUninit::<T>::uninit();
-            std::ptr::copy_nonoverlapping(
-                data.as_ptr(),
-                val.as_mut_ptr() as *mut u8,
-                es,
-            );
+            std::ptr::copy_nonoverlapping(data.as_ptr(), val.as_mut_ptr() as *mut u8, es);
             Ok(val.assume_init())
         }
     }
@@ -180,10 +169,7 @@ pub struct AttrBuilder<'a, T> {
 }
 
 impl<'a, T> AttrBuilder<'a, T> {
-    pub(crate) fn new(
-        file_inner: &'a SharedInner,
-        ds_index: usize,
-    ) -> Self {
+    pub(crate) fn new(file_inner: &'a SharedInner, ds_index: usize) -> Self {
         Self {
             file_inner,
             ds_index,

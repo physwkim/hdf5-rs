@@ -36,7 +36,6 @@ impl Default for FillValueMessage {
 }
 
 impl FillValueMessage {
-
     /// A user-defined fill value.
     pub fn with_value(data: Vec<u8>) -> Self {
         Self {
@@ -106,8 +105,7 @@ impl FillValueMessage {
                 });
             }
             let size =
-                u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]])
-                    as usize;
+                u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]) as usize;
             pos += 4;
             if buf.len() < pos + size {
                 return Err(FormatError::BufferTooShort {
@@ -228,7 +226,10 @@ mod tests {
         let buf = [3u8, 2, 0, 2, 4, 0, 0, 0, 0xAA, 0xBB];
         let err = FillValueMessage::decode(&buf).unwrap_err();
         match err {
-            FormatError::BufferTooShort { needed: 12, available: 10 } => {}
+            FormatError::BufferTooShort {
+                needed: 12,
+                available: 10,
+            } => {}
             other => panic!("unexpected error: {:?}", other),
         }
     }

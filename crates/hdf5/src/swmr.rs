@@ -54,7 +54,9 @@ impl SwmrFileWriter {
         frame_dims: &[u64],
     ) -> Result<usize> {
         let datatype = T::hdf5_type();
-        let idx = self.inner.create_streaming_dataset(name, datatype, frame_dims)?;
+        let idx = self
+            .inner
+            .create_streaming_dataset(name, datatype, frame_dims)?;
         Ok(idx)
     }
 
@@ -131,7 +133,11 @@ impl SwmrFileReader {
 
     /// Return the names of all datasets.
     pub fn dataset_names(&self) -> Vec<String> {
-        self.reader.dataset_names().iter().map(|s| s.to_string()).collect()
+        self.reader
+            .dataset_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// Return the current shape of a dataset.
@@ -150,7 +156,8 @@ impl SwmrFileReader {
         if raw.len() % T::element_size() != 0 {
             return Err(crate::error::Hdf5Error::TypeMismatch(format!(
                 "raw data size {} is not a multiple of element size {}",
-                raw.len(), T::element_size(),
+                raw.len(),
+                T::element_size(),
             )));
         }
         let count = raw.len() / T::element_size();

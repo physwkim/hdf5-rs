@@ -70,7 +70,11 @@ impl FilteredChunkEntry {
         let nbytes = read_size(&buf[sizeof_addr..], chunk_size_len);
         let off = sizeof_addr + chunk_size_len;
         let filter_mask = u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
-        Self { addr, nbytes, filter_mask }
+        Self {
+            addr,
+            nbytes,
+            filter_mask,
+        }
     }
 }
 
@@ -230,7 +234,10 @@ impl ExtensibleArrayHeader {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -241,20 +248,33 @@ impl ExtensibleArrayHeader {
         }
 
         let mut pos = 5;
-        let class_id = buf[pos]; pos += 1;
-        let raw_elmt_size = buf[pos]; pos += 1;
-        let max_nelmts_bits = buf[pos]; pos += 1;
-        let idx_blk_elmts = buf[pos]; pos += 1;
-        let data_blk_min_elmts = buf[pos]; pos += 1;
-        let sup_blk_min_data_ptrs = buf[pos]; pos += 1;
-        let max_dblk_page_nelmts_bits = buf[pos]; pos += 1;
+        let class_id = buf[pos];
+        pos += 1;
+        let raw_elmt_size = buf[pos];
+        pos += 1;
+        let max_nelmts_bits = buf[pos];
+        pos += 1;
+        let idx_blk_elmts = buf[pos];
+        pos += 1;
+        let data_blk_min_elmts = buf[pos];
+        pos += 1;
+        let sup_blk_min_data_ptrs = buf[pos];
+        pos += 1;
+        let max_dblk_page_nelmts_bits = buf[pos];
+        pos += 1;
 
-        let num_sblks_created = read_size(&buf[pos..], ss); pos += ss;
-        let size_sblks_created = read_size(&buf[pos..], ss); pos += ss;
-        let num_dblks_created = read_size(&buf[pos..], ss); pos += ss;
-        let size_dblks_created = read_size(&buf[pos..], ss); pos += ss;
-        let max_idx_set = read_size(&buf[pos..], ss); pos += ss;
-        let num_elmts_realized = read_size(&buf[pos..], ss); pos += ss;
+        let num_sblks_created = read_size(&buf[pos..], ss);
+        pos += ss;
+        let size_sblks_created = read_size(&buf[pos..], ss);
+        pos += ss;
+        let num_dblks_created = read_size(&buf[pos..], ss);
+        pos += ss;
+        let size_dblks_created = read_size(&buf[pos..], ss);
+        pos += ss;
+        let max_idx_set = read_size(&buf[pos..], ss);
+        pos += ss;
+        let num_elmts_realized = read_size(&buf[pos..], ss);
+        pos += ss;
 
         let idx_blk_addr = read_addr(&buf[pos..], sa);
 
@@ -313,7 +333,12 @@ pub struct FilteredIndexBlock {
 }
 
 impl FilteredIndexBlock {
-    pub fn new(header_addr: u64, idx_blk_elmts: u8, ndblk_addrs: usize, nsblk_addrs: usize) -> Self {
+    pub fn new(
+        header_addr: u64,
+        idx_blk_elmts: u8,
+        ndblk_addrs: usize,
+        nsblk_addrs: usize,
+    ) -> Self {
         Self {
             class_id: EA_CLS_FILT_CHUNK,
             header_addr,
@@ -326,7 +351,10 @@ impl FilteredIndexBlock {
     pub fn encode(&self, ctx: &FormatContext, chunk_size_len: u8) -> Vec<u8> {
         let sa = ctx.sizeof_addr as usize;
         let elmt_size = FilteredChunkEntry::raw_size(ctx.sizeof_addr, chunk_size_len) as usize;
-        let size = 4 + 1 + 1 + sa
+        let size = 4
+            + 1
+            + 1
+            + sa
             + self.elements.len() * elmt_size
             + self.dblk_addrs.len() * sa
             + self.sblk_addrs.len() * sa
@@ -364,14 +392,14 @@ impl FilteredIndexBlock {
     ) -> FormatResult<Self> {
         let sa = ctx.sizeof_addr as usize;
         let elmt_size = FilteredChunkEntry::raw_size(ctx.sizeof_addr, chunk_size_len) as usize;
-        let min_size = 4 + 1 + 1 + sa
-            + idx_blk_elmts * elmt_size
-            + ndblk_addrs * sa
-            + nsblk_addrs * sa
-            + 4;
+        let min_size =
+            4 + 1 + 1 + sa + idx_blk_elmts * elmt_size + ndblk_addrs * sa + nsblk_addrs * sa + 4;
 
         if buf.len() < min_size {
-            return Err(FormatError::BufferTooShort { needed: min_size, available: buf.len() });
+            return Err(FormatError::BufferTooShort {
+                needed: min_size,
+                available: buf.len(),
+            });
         }
         if buf[0..4] != EAIB_SIGNATURE {
             return Err(FormatError::InvalidSignature);
@@ -381,31 +409,52 @@ impl FilteredIndexBlock {
         }
 
         let data_end = min_size - 4;
-        let stored = u32::from_le_bytes([buf[data_end], buf[data_end+1], buf[data_end+2], buf[data_end+3]]);
+        let stored = u32::from_le_bytes([
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
+        ]);
         let computed = checksum_metadata(&buf[..data_end]);
         if stored != computed {
-            return Err(FormatError::ChecksumMismatch { expected: stored, computed });
+            return Err(FormatError::ChecksumMismatch {
+                expected: stored,
+                computed,
+            });
         }
 
         let class_id = buf[5];
         let mut pos = 6;
-        let header_addr = read_addr(&buf[pos..], sa); pos += sa;
+        let header_addr = read_addr(&buf[pos..], sa);
+        pos += sa;
 
         let mut elements = Vec::with_capacity(idx_blk_elmts);
         for _ in 0..idx_blk_elmts {
-            elements.push(FilteredChunkEntry::decode(&buf[pos..], sa, chunk_size_len as usize));
+            elements.push(FilteredChunkEntry::decode(
+                &buf[pos..],
+                sa,
+                chunk_size_len as usize,
+            ));
             pos += elmt_size;
         }
         let mut dblk_addrs = Vec::with_capacity(ndblk_addrs);
         for _ in 0..ndblk_addrs {
-            dblk_addrs.push(read_addr(&buf[pos..], sa)); pos += sa;
+            dblk_addrs.push(read_addr(&buf[pos..], sa));
+            pos += sa;
         }
         let mut sblk_addrs = Vec::with_capacity(nsblk_addrs);
         for _ in 0..nsblk_addrs {
-            sblk_addrs.push(read_addr(&buf[pos..], sa)); pos += sa;
+            sblk_addrs.push(read_addr(&buf[pos..], sa));
+            pos += sa;
         }
 
-        Ok(Self { class_id, header_addr, elements, dblk_addrs, sblk_addrs })
+        Ok(Self {
+            class_id,
+            header_addr,
+            elements,
+            dblk_addrs,
+            sblk_addrs,
+        })
     }
 }
 
@@ -464,36 +513,67 @@ impl FilteredDataBlock {
         let min_size = 4 + 1 + 1 + sa + bo_size + nelmts * elmt_size + 4;
 
         if buf.len() < min_size {
-            return Err(FormatError::BufferTooShort { needed: min_size, available: buf.len() });
+            return Err(FormatError::BufferTooShort {
+                needed: min_size,
+                available: buf.len(),
+            });
         }
-        if buf[0..4] != EADB_SIGNATURE { return Err(FormatError::InvalidSignature); }
-        if buf[4] != EA_VERSION { return Err(FormatError::InvalidVersion(buf[4])); }
+        if buf[0..4] != EADB_SIGNATURE {
+            return Err(FormatError::InvalidSignature);
+        }
+        if buf[4] != EA_VERSION {
+            return Err(FormatError::InvalidVersion(buf[4]));
+        }
 
         let data_end = min_size - 4;
-        let stored = u32::from_le_bytes([buf[data_end], buf[data_end+1], buf[data_end+2], buf[data_end+3]]);
+        let stored = u32::from_le_bytes([
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
+        ]);
         let computed = checksum_metadata(&buf[..data_end]);
         if stored != computed {
-            return Err(FormatError::ChecksumMismatch { expected: stored, computed });
+            return Err(FormatError::ChecksumMismatch {
+                expected: stored,
+                computed,
+            });
         }
 
         let class_id = buf[5];
         let mut pos = 6;
-        let header_addr = read_addr(&buf[pos..], sa); pos += sa;
-        let block_offset = read_size(&buf[pos..], bo_size); pos += bo_size;
+        let header_addr = read_addr(&buf[pos..], sa);
+        pos += sa;
+        let block_offset = read_size(&buf[pos..], bo_size);
+        pos += bo_size;
 
         let mut elements = Vec::with_capacity(nelmts);
         for _ in 0..nelmts {
-            elements.push(FilteredChunkEntry::decode(&buf[pos..], sa, chunk_size_len as usize));
+            elements.push(FilteredChunkEntry::decode(
+                &buf[pos..],
+                sa,
+                chunk_size_len as usize,
+            ));
             pos += elmt_size;
         }
 
-        Ok(Self { class_id, header_addr, block_offset, elements })
+        Ok(Self {
+            class_id,
+            header_addr,
+            block_offset,
+            elements,
+        })
     }
 }
 
 impl ExtensibleArrayIndexBlock {
     /// Create a new empty index block.
-    pub fn new(header_addr: u64, idx_blk_elmts: u8, ndblk_addrs: usize, nsblk_addrs: usize) -> Self {
+    pub fn new(
+        header_addr: u64,
+        idx_blk_elmts: u8,
+        ndblk_addrs: usize,
+        nsblk_addrs: usize,
+    ) -> Self {
         Self {
             class_id: EA_CLS_CHUNK,
             header_addr,
@@ -512,7 +592,9 @@ impl ExtensibleArrayIndexBlock {
         // + dblk_addrs(n * sa)
         // + sblk_addrs(n * sa)
         // + checksum(4)
-        4 + 1 + 1 + sa
+        4 + 1
+            + 1
+            + sa
             + self.elements.len() * sa
             + self.dblk_addrs.len() * sa
             + self.sblk_addrs.len() * sa
@@ -556,11 +638,8 @@ impl ExtensibleArrayIndexBlock {
         nsblk_addrs: usize,
     ) -> FormatResult<Self> {
         let sa = ctx.sizeof_addr as usize;
-        let min_size = 4 + 1 + 1 + sa
-            + idx_blk_elmts * sa
-            + ndblk_addrs * sa
-            + nsblk_addrs * sa
-            + 4;
+        let min_size =
+            4 + 1 + 1 + sa + idx_blk_elmts * sa + ndblk_addrs * sa + nsblk_addrs * sa + 4;
 
         if buf.len() < min_size {
             return Err(FormatError::BufferTooShort {
@@ -581,7 +660,10 @@ impl ExtensibleArrayIndexBlock {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -593,7 +675,8 @@ impl ExtensibleArrayIndexBlock {
 
         let class_id = buf[5];
         let mut pos = 6;
-        let header_addr = read_addr(&buf[pos..], sa); pos += sa;
+        let header_addr = read_addr(&buf[pos..], sa);
+        pos += sa;
 
         let mut elements = Vec::with_capacity(idx_blk_elmts);
         for _ in 0..idx_blk_elmts {
@@ -720,7 +803,10 @@ impl ExtensibleArrayDataBlock {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -732,8 +818,10 @@ impl ExtensibleArrayDataBlock {
 
         let class_id = buf[5];
         let mut pos = 6;
-        let header_addr = read_addr(&buf[pos..], sa); pos += sa;
-        let block_offset = read_size(&buf[pos..], bo_size); pos += bo_size;
+        let header_addr = read_addr(&buf[pos..], sa);
+        pos += sa;
+        let block_offset = read_size(&buf[pos..], bo_size);
+        pos += bo_size;
 
         let mut elements = Vec::with_capacity(nelmts);
         for _ in 0..nelmts {
@@ -777,11 +865,7 @@ pub fn compute_ndblk_addrs(sup_blk_min_data_ptrs: u8) -> usize {
 }
 
 /// Compute the total number of super blocks (nsblks) for the given parameters.
-fn compute_nsblks(
-    idx_blk_elmts: u8,
-    data_blk_min_elmts: u8,
-    max_nelmts_bits: u8,
-) -> usize {
+fn compute_nsblks(idx_blk_elmts: u8, data_blk_min_elmts: u8, max_nelmts_bits: u8) -> usize {
     let max_nelmts: u64 = 1u64 << (max_nelmts_bits as u64);
     let nelmts_remaining = max_nelmts - idx_blk_elmts as u64;
 
@@ -792,7 +876,10 @@ fn compute_nsblks(
             (1u64, data_blk_min_elmts as u64)
         } else {
             let half = (nsblks - 2) / 2;
-            (1u64 << (half + 1), (data_blk_min_elmts as u64) << (half + 1))
+            (
+                1u64 << (half + 1),
+                (data_blk_min_elmts as u64) << (half + 1),
+            )
         };
         acc = acc.saturating_add(ndblks_in_sblk.saturating_mul(dblk_size));
         nsblks += 1;
@@ -802,10 +889,7 @@ fn compute_nsblks(
 
 /// Compute sblk_idx_start: the first super block whose data block addresses
 /// are NOT stored in the index block's dblk_addrs array.
-fn compute_sblk_idx_start(
-    sup_blk_min_data_ptrs: u8,
-    nsblks: usize,
-) -> usize {
+fn compute_sblk_idx_start(sup_blk_min_data_ptrs: u8, nsblks: usize) -> usize {
     let ndblk_addrs = compute_ndblk_addrs(sup_blk_min_data_ptrs);
     let mut dblks_counted = 0usize;
     let mut sblk_idx_start = 0usize;
@@ -847,11 +931,17 @@ mod tests {
     use super::*;
 
     fn ctx8() -> FormatContext {
-        FormatContext { sizeof_addr: 8, sizeof_size: 8 }
+        FormatContext {
+            sizeof_addr: 8,
+            sizeof_size: 8,
+        }
     }
 
     fn ctx4() -> FormatContext {
-        FormatContext { sizeof_addr: 4, sizeof_size: 4 }
+        FormatContext {
+            sizeof_addr: 4,
+            sizeof_size: 4,
+        }
     }
 
     #[test]
@@ -914,9 +1004,7 @@ mod tests {
         assert_eq!(encoded.len(), iblk.encoded_size(&ctx8()));
         assert_eq!(&encoded[..4], b"EAIB");
 
-        let decoded = ExtensibleArrayIndexBlock::decode(
-            &encoded, &ctx8(), 4, ndblk, 0,
-        ).unwrap();
+        let decoded = ExtensibleArrayIndexBlock::decode(&encoded, &ctx8(), 4, ndblk, 0).unwrap();
         assert_eq!(decoded, iblk);
     }
 
@@ -924,9 +1012,7 @@ mod tests {
     fn index_block_roundtrip_ctx4() {
         let iblk = ExtensibleArrayIndexBlock::new(0x300, 4, 6, 0);
         let encoded = iblk.encode(&ctx4());
-        let decoded = ExtensibleArrayIndexBlock::decode(
-            &encoded, &ctx4(), 4, 6, 0,
-        ).unwrap();
+        let decoded = ExtensibleArrayIndexBlock::decode(&encoded, &ctx4(), 4, 6, 0).unwrap();
         assert_eq!(decoded, iblk);
     }
 
@@ -935,9 +1021,7 @@ mod tests {
         let iblk = ExtensibleArrayIndexBlock::new(0x500, 4, 6, 0);
         let mut encoded = iblk.encode(&ctx8());
         encoded[8] ^= 0xFF;
-        let err = ExtensibleArrayIndexBlock::decode(
-            &encoded, &ctx8(), 4, 6, 0,
-        ).unwrap_err();
+        let err = ExtensibleArrayIndexBlock::decode(&encoded, &ctx8(), 4, 6, 0).unwrap_err();
         assert!(matches!(err, FormatError::ChecksumMismatch { .. }));
     }
 

@@ -3,15 +3,15 @@
 //! Provides buffered file I/O, append-only allocation, dataset reading/writing,
 //! and SWMR (Single Writer Multiple Reader) protocol support.
 
-pub mod file_handle;
 pub mod allocator;
-pub mod writer;
+pub mod file_handle;
 pub mod reader;
 pub mod swmr;
+pub mod writer;
 
-pub use writer::Hdf5Writer;
 pub use reader::Hdf5Reader;
 pub use swmr::SwmrWriter;
+pub use writer::Hdf5Writer;
 
 #[derive(Debug)]
 pub enum IoError {

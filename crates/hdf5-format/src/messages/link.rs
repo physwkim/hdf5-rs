@@ -83,7 +83,7 @@ impl LinkMessage {
         // Always store link type so that soft links are correctly identified.
         let mut flags: u8 = name_len_code & FLAG_NAME_LEN_MASK;
         flags |= FLAG_LINK_TYPE; // always include link type for clarity
-        flags |= FLAG_CHARSET;   // always include charset (UTF-8)
+        flags |= FLAG_CHARSET; // always include charset (UTF-8)
 
         let mut buf = Vec::with_capacity(32);
         buf.push(VERSION);
@@ -198,16 +198,12 @@ impl LinkMessage {
             }
             LINK_TYPE_SOFT => {
                 check_len(buf, pos, 2)?;
-                let tlen =
-                    u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+                let tlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
                 pos += 2;
                 check_len(buf, pos, tlen)?;
                 let target = std::str::from_utf8(&buf[pos..pos + tlen])
                     .map_err(|e| {
-                        FormatError::InvalidData(format!(
-                            "invalid UTF-8 soft link target: {}",
-                            e
-                        ))
+                        FormatError::InvalidData(format!("invalid UTF-8 soft link target: {}", e))
                     })?
                     .to_string();
                 pos += tlen;

@@ -188,7 +188,10 @@ impl Bt2Header {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -199,17 +202,21 @@ impl Bt2Header {
         }
 
         let mut pos = 5;
-        let record_type = buf[pos]; pos += 1;
-        let node_size = u32::from_le_bytes([buf[pos], buf[pos+1], buf[pos+2], buf[pos+3]]);
+        let record_type = buf[pos];
+        pos += 1;
+        let node_size = u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
         pos += 4;
-        let record_size = u16::from_le_bytes([buf[pos], buf[pos+1]]);
+        let record_size = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
         pos += 2;
-        let depth = u16::from_le_bytes([buf[pos], buf[pos+1]]);
+        let depth = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
         pos += 2;
-        let split_percent = buf[pos]; pos += 1;
-        let merge_percent = buf[pos]; pos += 1;
-        let root_node_addr = read_addr(&buf[pos..], sa); pos += sa;
-        let num_records_in_root = u16::from_le_bytes([buf[pos], buf[pos+1]]);
+        let split_percent = buf[pos];
+        pos += 1;
+        let merge_percent = buf[pos];
+        pos += 1;
+        let root_node_addr = read_addr(&buf[pos..], sa);
+        pos += sa;
+        let num_records_in_root = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
         pos += 2;
         let total_num_records = read_size(&buf[pos..], ss);
 
@@ -302,7 +309,10 @@ impl Bt2LeafNode {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -373,12 +383,7 @@ impl Bt2InternalNode {
     }
 
     /// Compute the encoded size.
-    pub fn encoded_size(
-        &self,
-        ctx: &FormatContext,
-        depth: u16,
-        max_nrec_per_node: u32,
-    ) -> usize {
+    pub fn encoded_size(&self, ctx: &FormatContext, depth: u16, max_nrec_per_node: u32) -> usize {
         let sa = ctx.sizeof_addr as usize;
         let ss = ctx.sizeof_size as usize;
         let num_children = self.num_records as usize + 1;
@@ -395,12 +400,7 @@ impl Bt2InternalNode {
         size
     }
 
-    pub fn encode(
-        &self,
-        ctx: &FormatContext,
-        depth: u16,
-        max_nrec_per_node: u32,
-    ) -> Vec<u8> {
+    pub fn encode(&self, ctx: &FormatContext, depth: u16, max_nrec_per_node: u32) -> Vec<u8> {
         let sa = ctx.sizeof_addr as usize;
         let ss = ctx.sizeof_size as usize;
         let num_children = self.num_records as usize + 1;
@@ -492,7 +492,10 @@ impl Bt2InternalNode {
         // Verify checksum
         let data_end = min_size - 4;
         let stored_cksum = u32::from_le_bytes([
-            buf[data_end], buf[data_end + 1], buf[data_end + 2], buf[data_end + 3],
+            buf[data_end],
+            buf[data_end + 1],
+            buf[data_end + 2],
+            buf[data_end + 3],
         ]);
         let computed_cksum = checksum_metadata(&buf[..data_end]);
         if stored_cksum != computed_cksum {
@@ -600,7 +603,11 @@ impl Bt2ChunkIndex {
     /// Insert an unfiltered chunk record.
     pub fn insert(&mut self, scaled_offsets: Vec<u64>, chunk_address: u64) {
         // Check if a record with the same coordinates already exists
-        if let Some(existing) = self.records.iter_mut().find(|r| r.scaled_offsets == scaled_offsets) {
+        if let Some(existing) = self
+            .records
+            .iter_mut()
+            .find(|r| r.scaled_offsets == scaled_offsets)
+        {
             existing.chunk_address = chunk_address;
         } else {
             self.records.push(Bt2ChunkRecord {
@@ -618,7 +625,11 @@ impl Bt2ChunkIndex {
         chunk_size: u32,
         filter_mask: u32,
     ) {
-        if let Some(existing) = self.filtered_records.iter_mut().find(|r| r.scaled_offsets == scaled_offsets) {
+        if let Some(existing) = self
+            .filtered_records
+            .iter_mut()
+            .find(|r| r.scaled_offsets == scaled_offsets)
+        {
             existing.chunk_address = chunk_address;
             existing.chunk_size = chunk_size;
             existing.filter_mask = filter_mask;
@@ -634,12 +645,16 @@ impl Bt2ChunkIndex {
 
     /// Look up a chunk by its scaled coordinates. Returns the record if found.
     pub fn lookup(&self, scaled_offsets: &[u64]) -> Option<&Bt2ChunkRecord> {
-        self.records.iter().find(|r| r.scaled_offsets == scaled_offsets)
+        self.records
+            .iter()
+            .find(|r| r.scaled_offsets == scaled_offsets)
     }
 
     /// Look up a filtered chunk by its scaled coordinates.
     pub fn lookup_filtered(&self, scaled_offsets: &[u64]) -> Option<&Bt2FilteredChunkRecord> {
-        self.filtered_records.iter().find(|r| r.scaled_offsets == scaled_offsets)
+        self.filtered_records
+            .iter()
+            .find(|r| r.scaled_offsets == scaled_offsets)
     }
 
     /// Iterate all unfiltered records.
@@ -709,7 +724,11 @@ impl Bt2ChunkIndex {
         let record_data = self.encode_records(ctx);
 
         let leaf = Bt2LeafNode {
-            record_type: if self.filtered { BT2_TYPE_CHUNK_FILT } else { BT2_TYPE_CHUNK_UNFILT },
+            record_type: if self.filtered {
+                BT2_TYPE_CHUNK_FILT
+            } else {
+                BT2_TYPE_CHUNK_UNFILT
+            },
             record_data,
             num_records: num,
             record_size: rec_size,
@@ -719,7 +738,11 @@ impl Bt2ChunkIndex {
         // We'll set root_node_addr to UNDEF_ADDR; the caller sets it to the
         // actual leaf address after allocating.
         let header = Bt2Header {
-            record_type: if self.filtered { BT2_TYPE_CHUNK_FILT } else { BT2_TYPE_CHUNK_UNFILT },
+            record_type: if self.filtered {
+                BT2_TYPE_CHUNK_FILT
+            } else {
+                BT2_TYPE_CHUNK_UNFILT
+            },
             node_size: leaf_encoded.len() as u32,
             record_size: rec_size,
             depth: 0,
@@ -756,8 +779,14 @@ impl Bt2ChunkIndex {
             let mut scaled_offsets = Vec::with_capacity(ndims);
             for _ in 0..ndims {
                 let offset = u64::from_le_bytes([
-                    record_data[pos], record_data[pos+1], record_data[pos+2], record_data[pos+3],
-                    record_data[pos+4], record_data[pos+5], record_data[pos+6], record_data[pos+7],
+                    record_data[pos],
+                    record_data[pos + 1],
+                    record_data[pos + 2],
+                    record_data[pos + 3],
+                    record_data[pos + 4],
+                    record_data[pos + 5],
+                    record_data[pos + 6],
+                    record_data[pos + 7],
                 ]);
                 scaled_offsets.push(offset);
                 pos += 8;
@@ -795,8 +824,14 @@ impl Bt2ChunkIndex {
             let mut scaled_offsets = Vec::with_capacity(ndims);
             for _ in 0..ndims {
                 let offset = u64::from_le_bytes([
-                    record_data[pos], record_data[pos+1], record_data[pos+2], record_data[pos+3],
-                    record_data[pos+4], record_data[pos+5], record_data[pos+6], record_data[pos+7],
+                    record_data[pos],
+                    record_data[pos + 1],
+                    record_data[pos + 2],
+                    record_data[pos + 3],
+                    record_data[pos + 4],
+                    record_data[pos + 5],
+                    record_data[pos + 6],
+                    record_data[pos + 7],
                 ]);
                 scaled_offsets.push(offset);
                 pos += 8;
@@ -804,11 +839,17 @@ impl Bt2ChunkIndex {
             let chunk_address = read_addr(&record_data[pos..], sa);
             pos += sa;
             let chunk_size = u32::from_le_bytes([
-                record_data[pos], record_data[pos+1], record_data[pos+2], record_data[pos+3],
+                record_data[pos],
+                record_data[pos + 1],
+                record_data[pos + 2],
+                record_data[pos + 3],
             ]);
             pos += 4;
             let filter_mask = u32::from_le_bytes([
-                record_data[pos], record_data[pos+1], record_data[pos+2], record_data[pos+3],
+                record_data[pos],
+                record_data[pos + 1],
+                record_data[pos + 2],
+                record_data[pos + 3],
             ]);
             pos += 4;
             records.push(Bt2FilteredChunkRecord {
@@ -848,11 +889,17 @@ mod tests {
     use super::*;
 
     fn ctx8() -> FormatContext {
-        FormatContext { sizeof_addr: 8, sizeof_size: 8 }
+        FormatContext {
+            sizeof_addr: 8,
+            sizeof_size: 8,
+        }
     }
 
     fn ctx4() -> FormatContext {
-        FormatContext { sizeof_addr: 4, sizeof_size: 4 }
+        FormatContext {
+            sizeof_addr: 4,
+            sizeof_size: 4,
+        }
     }
 
     // ---- Header tests ----
@@ -965,9 +1012,7 @@ mod tests {
         let encoded = node.encode(&ctx8(), 1, max_nrec);
         assert_eq!(&encoded[..4], b"BTIN");
 
-        let decoded = Bt2InternalNode::decode(
-            &encoded, &ctx8(), 1, rec_size, 1, max_nrec,
-        ).unwrap();
+        let decoded = Bt2InternalNode::decode(&encoded, &ctx8(), 1, rec_size, 1, max_nrec).unwrap();
         assert_eq!(decoded.record_data, node.record_data);
         assert_eq!(decoded.child_addrs, node.child_addrs);
         assert_eq!(decoded.child_nrecords, node.child_nrecords);
@@ -986,9 +1031,7 @@ mod tests {
         let max_nrec = 16u32;
         let encoded = node.encode(&ctx8(), 2, max_nrec);
 
-        let decoded = Bt2InternalNode::decode(
-            &encoded, &ctx8(), 2, rec_size, 2, max_nrec,
-        ).unwrap();
+        let decoded = Bt2InternalNode::decode(&encoded, &ctx8(), 2, rec_size, 2, max_nrec).unwrap();
         assert_eq!(decoded.child_total_nrecords, vec![100, 200, 50]);
         assert_eq!(decoded.child_nrecords, vec![4, 6, 2]);
     }
@@ -1050,9 +1093,8 @@ mod tests {
 
         // Decode leaf
         let leaf = Bt2LeafNode::decode(&leaf_bytes, 3, hdr.record_size).unwrap();
-        let records = Bt2ChunkIndex::decode_unfiltered_records(
-            &leaf.record_data, 3, 2, &ctx,
-        ).unwrap();
+        let records =
+            Bt2ChunkIndex::decode_unfiltered_records(&leaf.record_data, 3, 2, &ctx).unwrap();
 
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].scaled_offsets, vec![0, 0]);
@@ -1079,9 +1121,8 @@ mod tests {
         assert_eq!(hdr.record_size, 32);
 
         let leaf = Bt2LeafNode::decode(&leaf_bytes, 2, hdr.record_size).unwrap();
-        let records = Bt2ChunkIndex::decode_filtered_records(
-            &leaf.record_data, 2, 2, &ctx,
-        ).unwrap();
+        let records =
+            Bt2ChunkIndex::decode_filtered_records(&leaf.record_data, 2, 2, &ctx).unwrap();
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].chunk_address, 0x1000);
@@ -1105,9 +1146,8 @@ mod tests {
         assert_eq!(hdr.record_size, 12);
 
         let leaf = Bt2LeafNode::decode(&leaf_bytes, 2, hdr.record_size).unwrap();
-        let records = Bt2ChunkIndex::decode_unfiltered_records(
-            &leaf.record_data, 2, 1, &ctx,
-        ).unwrap();
+        let records =
+            Bt2ChunkIndex::decode_unfiltered_records(&leaf.record_data, 2, 1, &ctx).unwrap();
         assert_eq!(records[0].chunk_address, 0x100);
         assert_eq!(records[1].chunk_address, 0x200);
     }

@@ -364,7 +364,10 @@ mod tests {
         let buf = [2u8, 1, 0, 1, 0, 0];
         let err = DataspaceMessage::decode(&buf, &ctx8()).unwrap_err();
         match err {
-            FormatError::BufferTooShort { needed: 12, available: 6 } => {}
+            FormatError::BufferTooShort {
+                needed: 12,
+                available: 6,
+            } => {}
             other => panic!("unexpected error: {:?}", other),
         }
     }

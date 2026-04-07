@@ -214,9 +214,14 @@ impl H5File {
         let inner = borrow_inner(&self.inner);
         match &*inner {
             H5FileInner::Reader(reader) => {
-                let attr = reader.root_attr(name)
+                let attr = reader
+                    .root_attr(name)
                     .ok_or_else(|| Hdf5Error::NotFound(name.to_string()))?;
-                let end = attr.data.iter().position(|&b| b == 0).unwrap_or(attr.data.len());
+                let end = attr
+                    .data
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(attr.data.len());
                 Ok(String::from_utf8_lossy(&attr.data[..end]).to_string())
             }
             _ => Err(Hdf5Error::InvalidState("not in read mode".into())),
@@ -240,9 +245,9 @@ impl H5File {
                 writer.create_vlen_string_dataset(name, strings)?;
                 Ok(())
             }
-            H5FileInner::Reader(_) => Err(Hdf5Error::InvalidState(
-                "cannot write in read mode".into(),
-            )),
+            H5FileInner::Reader(_) => {
+                Err(Hdf5Error::InvalidState("cannot write in read mode".into()))
+            }
             H5FileInner::Closed => Err(Hdf5Error::InvalidState("file is closed".into())),
         }
     }
@@ -268,9 +273,7 @@ impl H5File {
                 "cannot open a dataset by name in write mode; use new_dataset() instead"
                     .to_string(),
             )),
-            H5FileInner::Closed => Err(Hdf5Error::InvalidState(
-                "file is closed".to_string(),
-            )),
+            H5FileInner::Closed => Err(Hdf5Error::InvalidState("file is closed".to_string())),
         }
     }
 
@@ -282,12 +285,16 @@ impl H5File {
     pub fn dataset_names(&self) -> Vec<String> {
         let inner = borrow_inner(&self.inner);
         match &*inner {
-            H5FileInner::Reader(reader) => {
-                reader.dataset_names().iter().map(|s| s.to_string()).collect()
-            }
-            H5FileInner::Writer(writer) => {
-                writer.dataset_names().iter().map(|s| s.to_string()).collect()
-            }
+            H5FileInner::Reader(reader) => reader
+                .dataset_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            H5FileInner::Writer(writer) => writer
+                .dataset_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             H5FileInner::Closed => Vec::new(),
         }
     }
@@ -377,7 +384,11 @@ mod tests {
         // Write
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<u8>().shape([4, 4]).create("data").unwrap();
+            let ds = file
+                .new_dataset::<u8>()
+                .shape([4, 4])
+                .create("data")
+                .unwrap();
             ds.write_raw(&[0u8; 16]).unwrap();
             file.close().unwrap();
         }
@@ -405,7 +416,11 @@ mod tests {
         // Write
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<f64>().shape([2, 3]).create("matrix").unwrap();
+            let ds = file
+                .new_dataset::<f64>()
+                .shape([2, 3])
+                .create("matrix")
+                .unwrap();
             ds.write_raw(&values).unwrap();
             file.close().unwrap();
         }
@@ -431,7 +446,11 @@ mod tests {
             let ds1 = file.new_dataset::<i32>().shape([3]).create("ints").unwrap();
             ds1.write_raw(&[10i32, 20, 30]).unwrap();
 
-            let ds2 = file.new_dataset::<f32>().shape([2, 2]).create("floats").unwrap();
+            let ds2 = file
+                .new_dataset::<f32>()
+                .shape([2, 2])
+                .create("floats")
+                .unwrap();
             ds2.write_raw(&[1.0f32, 2.0, 3.0, 4.0]).unwrap();
 
             file.close().unwrap();
@@ -473,15 +492,27 @@ mod integration_tests {
         let path = std::env::temp_dir().join("test_hdf5rs_integration.h5");
         let file = H5File::create(&path).unwrap();
 
-        let ds = file.new_dataset::<u8>().shape([4usize, 4]).create("data_u8").unwrap();
+        let ds = file
+            .new_dataset::<u8>()
+            .shape([4usize, 4])
+            .create("data_u8")
+            .unwrap();
         let data: Vec<u8> = (0..16).collect();
         ds.write_raw(&data).unwrap();
 
-        let ds2 = file.new_dataset::<f64>().shape([3usize, 2]).create("data_f64").unwrap();
+        let ds2 = file
+            .new_dataset::<f64>()
+            .shape([3usize, 2])
+            .create("data_f64")
+            .unwrap();
         let fdata: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         ds2.write_raw(&fdata).unwrap();
 
-        let ds3 = file.new_dataset::<i32>().shape([5usize]).create("values").unwrap();
+        let ds3 = file
+            .new_dataset::<i32>()
+            .shape([5usize])
+            .create("values")
+            .unwrap();
         let idata: Vec<i32> = vec![-10, -5, 0, 5, 10];
         ds3.write_raw(&idata).unwrap();
 
@@ -497,7 +528,8 @@ mod integration_tests {
         let file = H5File::create(&path).unwrap();
 
         // Create a chunked dataset with unlimited first dimension
-        let ds = file.new_dataset::<f64>()
+        let ds = file
+            .new_dataset::<f64>()
             .shape([0usize, 4])
             .chunk(&[1, 4])
             .max_shape(&[None, Some(4)])
@@ -525,7 +557,8 @@ mod integration_tests {
         let path = std::env::temp_dir().join("test_hdf5rs_chunked_many.h5");
         let file = H5File::create(&path).unwrap();
 
-        let ds = file.new_dataset::<i32>()
+        let ds = file
+            .new_dataset::<i32>()
             .shape([0usize, 3])
             .chunk(&[1, 3])
             .max_shape(&[None, Some(3)])
@@ -606,7 +639,8 @@ mod integration_tests {
         // Write
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<i32>()
+            let ds = file
+                .new_dataset::<i32>()
                 .shape([0usize, 3])
                 .chunk(&[1, 3])
                 .max_shape(&[None, Some(3)])
@@ -644,7 +678,8 @@ mod integration_tests {
         // Write compressed
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<f64>()
+            let ds = file
+                .new_dataset::<f64>()
                 .shape([0usize, 4])
                 .chunk(&[1, 4])
                 .max_shape(&[None, Some(4)])
@@ -669,7 +704,13 @@ mod integration_tests {
             let data = ds.read_raw::<f64>().unwrap();
             assert_eq!(data.len(), 40);
             for (i, val) in data.iter().enumerate() {
-                assert!((val - i as f64).abs() < 1e-10, "mismatch at {}: {} != {}", i, val, i);
+                assert!(
+                    (val - i as f64).abs() < 1e-10,
+                    "mismatch at {}: {} != {}",
+                    i,
+                    val,
+                    i
+                );
             }
         }
 
@@ -682,7 +723,8 @@ mod integration_tests {
 
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<i32>()
+            let ds = file
+                .new_dataset::<i32>()
                 .shape([0usize, 3])
                 .chunk(&[1, 3])
                 .max_shape(&[None, Some(3)])
@@ -719,7 +761,11 @@ mod integration_tests {
         // Create initial file
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<i32>().shape([3usize]).create("first").unwrap();
+            let ds = file
+                .new_dataset::<i32>()
+                .shape([3usize])
+                .create("first")
+                .unwrap();
             ds.write_raw(&[1i32, 2, 3]).unwrap();
             file.close().unwrap();
         }
@@ -727,7 +773,11 @@ mod integration_tests {
         // Append new dataset
         {
             let file = H5File::open_rw(&path).unwrap();
-            let ds = file.new_dataset::<f64>().shape([2usize]).create("second").unwrap();
+            let ds = file
+                .new_dataset::<f64>()
+                .shape([2usize])
+                .create("second")
+                .unwrap();
             ds.write_raw(&[4.0f64, 5.0]).unwrap();
             file.close().unwrap();
         }
@@ -754,7 +804,8 @@ mod integration_tests {
         let path = std::env::temp_dir().join("hdf5_vlen_wr.h5");
         {
             let file = H5File::create(&path).unwrap();
-            file.write_vlen_strings("names", &["alice", "bob", "charlie"]).unwrap();
+            file.write_vlen_strings("names", &["alice", "bob", "charlie"])
+                .unwrap();
             file.close().unwrap();
         }
         {
@@ -771,7 +822,8 @@ mod integration_tests {
         let path = std::env::temp_dir().join("hdf5_shuf_defl.h5");
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<f64>()
+            let ds = file
+                .new_dataset::<f64>()
                 .shape([0usize, 4])
                 .chunk(&[1, 4])
                 .max_shape(&[None, Some(4)])
@@ -806,7 +858,11 @@ mod integration_tests {
             let file = H5File::create(&path).unwrap();
             file.set_attr_string("title", "Test File").unwrap();
             file.set_attr_numeric("version", &42i32).unwrap();
-            let ds = file.new_dataset::<u8>().shape([1usize]).create("dummy").unwrap();
+            let ds = file
+                .new_dataset::<u8>()
+                .shape([1usize])
+                .create("dummy")
+                .unwrap();
             ds.write_raw(&[0u8]).unwrap();
             file.close().unwrap();
         }
@@ -852,7 +908,8 @@ mod integration_tests {
         // Create with 5 frames
         {
             let file = H5File::create(&path).unwrap();
-            let ds = file.new_dataset::<i32>()
+            let ds = file
+                .new_dataset::<i32>()
                 .shape([0usize, 3])
                 .chunk(&[1, 3])
                 .max_shape(&[None, Some(3)])
@@ -917,20 +974,23 @@ mod integration_tests {
             let raw = det.create_group("raw").unwrap();
 
             // Create datasets in groups
-            let ds1 = det.new_dataset::<f32>()
+            let ds1 = det
+                .new_dataset::<f32>()
                 .shape([10usize])
                 .create("temperature")
                 .unwrap();
             ds1.write_raw(&[1.0f32; 10]).unwrap();
 
-            let ds2 = raw.new_dataset::<u16>()
+            let ds2 = raw
+                .new_dataset::<u16>()
                 .shape([4usize, 4])
                 .create("image")
                 .unwrap();
             ds2.write_raw(&[42u16; 16]).unwrap();
 
             // Root-level dataset
-            let ds3 = file.new_dataset::<i32>()
+            let ds3 = file
+                .new_dataset::<i32>()
                 .shape([3usize])
                 .create("version")
                 .unwrap();
@@ -977,7 +1037,8 @@ mod integration_tests {
             let grp = file.create_group("sensors").unwrap();
             let sub = grp.create_group("accel").unwrap();
 
-            let ds = sub.new_dataset::<f64>()
+            let ds = sub
+                .new_dataset::<f64>()
                 .shape([3usize])
                 .create("xyz")
                 .unwrap();
@@ -1038,12 +1099,17 @@ mod h5py_compat_tests {
             let file = H5File::create(&path).unwrap();
 
             // Contiguous
-            let ds = file.new_dataset::<f64>().shape([3usize, 4]).create("matrix").unwrap();
+            let ds = file
+                .new_dataset::<f64>()
+                .shape([3usize, 4])
+                .create("matrix")
+                .unwrap();
             let data: Vec<f64> = (0..12).map(|i| i as f64).collect();
             ds.write_raw(&data).unwrap();
 
             // Chunked + compressed
-            let ds2 = file.new_dataset::<i32>()
+            let ds2 = file
+                .new_dataset::<i32>()
                 .shape([0usize, 2])
                 .chunk(&[1, 2])
                 .max_shape(&[None, Some(2)])
@@ -1059,12 +1125,20 @@ mod h5py_compat_tests {
 
             // Group
             let grp = file.create_group("meta").unwrap();
-            let ds3 = grp.new_dataset::<u8>().shape([4usize]).create("flags").unwrap();
+            let ds3 = grp
+                .new_dataset::<u8>()
+                .shape([4usize])
+                .create("flags")
+                .unwrap();
             ds3.write_raw(&[1u8, 0, 1, 0]).unwrap();
 
             // String attribute
             use crate::types::VarLenUnicode;
-            let attr = ds.new_attr::<VarLenUnicode>().shape(()).create("units").unwrap();
+            let attr = ds
+                .new_attr::<VarLenUnicode>()
+                .shape(())
+                .create("units")
+                .unwrap();
             attr.write_string("meters").unwrap();
 
             file.close().unwrap();

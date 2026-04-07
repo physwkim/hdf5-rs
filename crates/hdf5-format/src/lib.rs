@@ -4,16 +4,16 @@
 //! (superblock, object headers, messages, chunk indices) without performing
 //! any file I/O. It is used by `hdf5-io` and `hdf5` crates.
 
+pub mod btree_v1;
 pub mod checksum;
-pub mod zstd;
-pub mod superblock;
-pub mod object_header;
-pub mod messages;
 pub mod chunk_index;
 pub mod global_heap;
 pub mod local_heap;
+pub mod messages;
+pub mod object_header;
+pub mod superblock;
 pub mod symbol_table;
-pub mod btree_v1;
+pub mod zstd;
 
 /// Format context carrying file-level encoding parameters
 #[derive(Debug, Clone, Copy)]
@@ -24,7 +24,10 @@ pub struct FormatContext {
 
 impl FormatContext {
     pub fn default_v3() -> Self {
-        Self { sizeof_addr: 8, sizeof_size: 8 }
+        Self {
+            sizeof_addr: 8,
+            sizeof_size: 8,
+        }
     }
 }
 
@@ -48,7 +51,11 @@ impl std::fmt::Display for FormatError {
             Self::InvalidSignature => write!(f, "invalid HDF5 signature"),
             Self::InvalidVersion(v) => write!(f, "unsupported version: {}", v),
             Self::BufferTooShort { needed, available } => {
-                write!(f, "buffer too short: need {} bytes, have {}", needed, available)
+                write!(
+                    f,
+                    "buffer too short: need {} bytes, have {}",
+                    needed, available
+                )
             }
             Self::ChecksumMismatch { expected, computed } => {
                 write!(

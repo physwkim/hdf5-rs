@@ -8,20 +8,20 @@
 
 use std::path::Path;
 
-use hdf5_format::superblock::{SuperblockV2V3, SuperblockV0V1, detect_superblock_version};
-use hdf5_format::object_header::ObjectHeader;
-use hdf5_format::messages::*;
-use hdf5_format::messages::dataspace::DataspaceMessage;
-use hdf5_format::messages::datatype::DatatypeMessage;
-use hdf5_format::messages::link::LinkMessage;
-use hdf5_format::messages::link::LinkTarget;
+use hdf5_format::btree_v1::BTreeV1Node;
+use hdf5_format::global_heap::{decode_vlen_reference, vlen_reference_size, GlobalHeapCollection};
+use hdf5_format::local_heap::{local_heap_get_string, LocalHeapHeader};
 use hdf5_format::messages::attribute::AttributeMessage;
 use hdf5_format::messages::data_layout::{self, DataLayoutMessage};
-use hdf5_format::messages::filter::{FilterPipeline, self};
-use hdf5_format::global_heap::{GlobalHeapCollection, decode_vlen_reference, vlen_reference_size};
-use hdf5_format::local_heap::{LocalHeapHeader, local_heap_get_string};
+use hdf5_format::messages::dataspace::DataspaceMessage;
+use hdf5_format::messages::datatype::DatatypeMessage;
+use hdf5_format::messages::filter::{self, FilterPipeline};
+use hdf5_format::messages::link::LinkMessage;
+use hdf5_format::messages::link::LinkTarget;
+use hdf5_format::messages::*;
+use hdf5_format::object_header::ObjectHeader;
+use hdf5_format::superblock::{detect_superblock_version, SuperblockV0V1, SuperblockV2V3};
 use hdf5_format::symbol_table::SymbolTableNode;
-use hdf5_format::btree_v1::BTreeV1Node;
 use hdf5_format::{FormatContext, UNDEF_ADDR};
 
 use crate::file_handle::FileHandle;
@@ -252,20 +252,23 @@ impl Hdf5Reader {
                     };
 
                     // Try to read as a dataset
-                    if let Some(info) = Self::read_dataset_from_object_header(
-                        handle, ctx, *address, &full_name,
-                    )? {
+                    if let Some(info) =
+                        Self::read_dataset_from_object_header(handle, ctx, *address, &full_name)?
+                    {
                         datasets.push(info);
                     } else {
                         // Not a dataset — might be a group. Try reading its
                         // object header for link messages.
                         let child_buf = handle.read_at_most(*address, 8192)?;
                         if let Ok((child_header, _)) = ObjectHeader::decode_any(&child_buf) {
-                            let has_links = child_header.messages.iter()
-                                .any(|m| m.msg_type == MSG_LINK);
+                            let has_links =
+                                child_header.messages.iter().any(|m| m.msg_type == MSG_LINK);
                             if has_links {
                                 let child_ds = Self::discover_datasets_recursive(
-                                    handle, &child_header, ctx, &full_name,
+                                    handle,
+                                    &child_header,
+                                    ctx,
+                                    &full_name,
                                 )?;
                                 datasets.extend(child_ds);
                             }
@@ -315,7 +318,10 @@ impl Hdf5Reader {
 
                 // Try to read this as a dataset
                 if let Some(info) = Self::read_dataset_from_object_header(
-                    handle, ctx, entry.obj_header_addr, &name,
+                    handle,
+                    ctx,
+                    entry.obj_header_addr,
+                    &name,
                 )? {
                     datasets.push(info);
                 }
@@ -392,11 +398,13 @@ impl Hdf5Reader {
                     break;
                 }
                 if msg_type != 0 {
-                    header.messages.push(hdf5_format::object_header::ObjectHeaderMessage {
-                        msg_type: msg_type as u8,
-                        flags: msg_flags,
-                        data: cont_buf[pos..pos + data_size].to_vec(),
-                    });
+                    header
+                        .messages
+                        .push(hdf5_format::object_header::ObjectHeaderMessage {
+                            msg_type: msg_type as u8,
+                            flags: msg_flags,
+                            data: cont_buf[pos..pos + data_size].to_vec(),
+                        });
                 }
                 pos += data_size;
                 // v1 alignment to 8 bytes
@@ -469,23 +477,29 @@ impl Hdf5Reader {
 
     /// Return the attribute names of a dataset.
     pub fn dataset_attr_names(&self, name: &str) -> IoResult<Vec<String>> {
-        let info = self.dataset_info(name)
+        let info = self
+            .dataset_info(name)
             .ok_or_else(|| crate::IoError::NotFound(name.to_string()))?;
         Ok(info.attributes.iter().map(|a| a.name.clone()).collect())
     }
 
     /// Return a specific attribute by dataset name and attribute name.
     pub fn dataset_attr(&self, ds_name: &str, attr_name: &str) -> IoResult<&AttributeMessage> {
-        let info = self.dataset_info(ds_name)
+        let info = self
+            .dataset_info(ds_name)
             .ok_or_else(|| crate::IoError::NotFound(ds_name.to_string()))?;
-        info.attributes.iter()
+        info.attributes
+            .iter()
             .find(|a| a.name == attr_name)
             .ok_or_else(|| crate::IoError::NotFound(format!("{}:{}", ds_name, attr_name)))
     }
 
     /// Return the names of root-level (file) attributes.
     pub fn root_attr_names(&self) -> Vec<String> {
-        self.root_attributes.iter().map(|a| a.name.clone()).collect()
+        self.root_attributes
+            .iter()
+            .map(|a| a.name.clone())
+            .collect()
     }
 
     /// Return a root-level attribute by name.
@@ -522,11 +536,24 @@ impl Hdf5Reader {
                 Ok(data)
             }
             DataLayoutMessage::Compact { data } => Ok(data.clone()),
-            DataLayoutMessage::ChunkedV4 { chunk_dims, index_address, index_type, earray_params, .. } => {
+            DataLayoutMessage::ChunkedV4 {
+                chunk_dims,
+                index_address,
+                index_type,
+                earray_params,
+                ..
+            } => {
                 // The layout's chunk_dims include the element size as
                 // the trailing dimension. Strip it for chunk indexing.
                 let real_chunk_dims = &chunk_dims[..chunk_dims.len() - 1];
-                self.read_chunked_v4(name, real_chunk_dims, *index_address, *index_type, earray_params.as_ref(), pipeline.as_ref())
+                self.read_chunked_v4(
+                    name,
+                    real_chunk_dims,
+                    *index_address,
+                    *index_type,
+                    earray_params.as_ref(),
+                    pipeline.as_ref(),
+                )
             }
         }
     }
@@ -550,7 +577,9 @@ impl Hdf5Reader {
         };
 
         // Re-read root group object header.
-        let root_buf = self.handle.read_at_most(sb.root_group_object_header_address, 4096)?;
+        let root_buf = self
+            .handle
+            .read_at_most(sb.root_group_object_header_address, 4096)?;
         let (root_header, _) = ObjectHeader::decode(&root_buf)?;
 
         // Re-scan datasets from link messages.
@@ -575,7 +604,8 @@ impl Hdf5Reader {
     ) -> IoResult<Vec<u8>> {
         use hdf5_format::chunk_index::extensible_array::{self as ea, *};
 
-        let info = self.dataset_info(name)
+        let info = self
+            .dataset_info(name)
             .ok_or_else(|| crate::IoError::NotFound(name.to_string()))?;
         let dims = info.dataspace.dims.clone();
         let element_size = info.datatype.element_size() as u64;
@@ -588,7 +618,9 @@ impl Hdf5Reader {
                     return Ok(vec![]);
                 }
                 let data = if let Some(pipeline) = pipeline {
-                    let raw = self.handle.read_at_most(index_address, total_size as usize * 2)?;
+                    let raw = self
+                        .handle
+                        .read_at_most(index_address, total_size as usize * 2)?;
                     filter::reverse_filters(pipeline, &raw)?
                 } else {
                     self.handle.read_at(index_address, total_size as usize)?
@@ -602,9 +634,8 @@ impl Hdf5Reader {
                 self.read_chunked_btree_v2(name, chunk_dims, index_address, pipeline)
             }
             data_layout::ChunkIndexType::ExtensibleArray => {
-                let params = earray_params.ok_or_else(|| {
-                    crate::IoError::InvalidState("missing earray params".into())
-                })?;
+                let params = earray_params
+                    .ok_or_else(|| crate::IoError::InvalidState("missing earray params".into()))?;
 
                 if index_address == UNDEF_ADDR {
                     return Ok(vec![]);
@@ -646,9 +677,12 @@ impl Hdf5Reader {
 
                     let iblk_buf = self.handle.read_at_most(ea_hdr.idx_blk_addr, 65536)?;
                     let fiblk = ea::FilteredIndexBlock::decode(
-                        &iblk_buf, &self.ctx,
+                        &iblk_buf,
+                        &self.ctx,
                         params.idx_blk_elmts as usize,
-                        ndblk_addrs, nsblk_addrs, chunk_size_len,
+                        ndblk_addrs,
+                        nsblk_addrs,
+                        chunk_size_len,
                     )?;
 
                     for e in &fiblk.elements {
@@ -663,14 +697,19 @@ impl Hdf5Reader {
                         } else {
                             let dblk_buf = self.handle.read_at_most(dblk_addr, 65536)?;
                             let dblk = ea::FilteredDataBlock::decode(
-                                &dblk_buf, &self.ctx,
-                                params.max_nelmts_bits, dblk_nelmts, chunk_size_len,
+                                &dblk_buf,
+                                &self.ctx,
+                                params.max_nelmts_bits,
+                                dblk_nelmts,
+                                chunk_size_len,
                             )?;
                             for e in &dblk.elements {
                                 chunk_entries.push((e.addr, e.nbytes));
                             }
                         }
-                        if chunk_entries.len() >= chunks_dim0 as usize { break; }
+                        if chunk_entries.len() >= chunks_dim0 as usize {
+                            break;
+                        }
                         pair_count += 1;
                         if pair_count >= 2 {
                             pair_count = 0;
@@ -680,9 +719,11 @@ impl Hdf5Reader {
                 } else {
                     let iblk_buf = self.handle.read_at_most(ea_hdr.idx_blk_addr, 8192)?;
                     let iblk = ExtensibleArrayIndexBlock::decode(
-                        &iblk_buf, &self.ctx,
+                        &iblk_buf,
+                        &self.ctx,
                         params.idx_blk_elmts as usize,
-                        ndblk_addrs, nsblk_addrs,
+                        ndblk_addrs,
+                        nsblk_addrs,
                     )?;
                     for &addr in &iblk.elements {
                         chunk_entries.push((addr, chunk_bytes));
@@ -695,14 +736,18 @@ impl Hdf5Reader {
                         } else {
                             let dblk_buf = self.handle.read_at_most(dblk_addr, 65536)?;
                             let dblk = ExtensibleArrayDataBlock::decode(
-                                &dblk_buf, &self.ctx,
-                                params.max_nelmts_bits, dblk_nelmts,
+                                &dblk_buf,
+                                &self.ctx,
+                                params.max_nelmts_bits,
+                                dblk_nelmts,
                             )?;
                             for &addr in &dblk.elements {
                                 chunk_entries.push((addr, chunk_bytes));
                             }
                         }
-                        if chunk_entries.len() >= chunks_dim0 as usize { break; }
+                        if chunk_entries.len() >= chunks_dim0 as usize {
+                            break;
+                        }
                         pair_count += 1;
                         if pair_count >= 2 {
                             pair_count = 0;
@@ -730,12 +775,14 @@ impl Hdf5Reader {
                     #[cfg(feature = "parallel")]
                     let decompressed: Vec<Option<Vec<u8>>> = {
                         use rayon::prelude::*;
-                        raw_chunks.into_par_iter()
+                        raw_chunks
+                            .into_par_iter()
                             .map(|raw| raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r)))
                             .collect()
                     };
                     #[cfg(not(feature = "parallel"))]
-                    let decompressed: Vec<Option<Vec<u8>>> = raw_chunks.into_iter()
+                    let decompressed: Vec<Option<Vec<u8>>> = raw_chunks
+                        .into_iter()
                         .map(|raw| raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r)))
                         .collect();
 
@@ -750,7 +797,9 @@ impl Hdf5Reader {
                     }
                 } else {
                     for (i, &(addr, nbytes)) in chunk_entries[..n_chunks].iter().enumerate() {
-                        if addr == UNDEF_ADDR { continue; }
+                        if addr == UNDEF_ADDR {
+                            continue;
+                        }
                         let chunk_data = self.handle.read_at(addr, nbytes as usize)?;
                         let offset = i as u64 * chunk_bytes;
                         let end = std::cmp::min(offset + chunk_bytes, total_size);
@@ -763,7 +812,8 @@ impl Hdf5Reader {
                 Ok(output)
             }
             _ => Err(crate::IoError::InvalidState(format!(
-                "unsupported chunk index type: {:?}", index_type
+                "unsupported chunk index type: {:?}",
+                index_type
             ))),
         }
     }
@@ -778,7 +828,8 @@ impl Hdf5Reader {
     ) -> IoResult<Vec<u8>> {
         use hdf5_format::chunk_index::fixed_array::*;
 
-        let info = self.dataset_info(name)
+        let info = self
+            .dataset_info(name)
             .ok_or_else(|| crate::IoError::NotFound(name.to_string()))?;
         let dims = info.dataspace.dims.clone();
         let element_size = info.datatype.element_size() as u64;
@@ -799,7 +850,9 @@ impl Hdf5Reader {
         // Read FA data block
         let dblk_buf = self.handle.read_at_most(fa_hdr.data_blk_addr, 65536)?;
         let fa_dblk = FixedArrayDataBlock::decode_unfiltered(
-            &dblk_buf, &self.ctx, fa_hdr.num_elmts as usize,
+            &dblk_buf,
+            &self.ctx,
+            fa_hdr.num_elmts as usize,
         )?;
 
         // Compute chunk byte size
@@ -822,9 +875,15 @@ impl Hdf5Reader {
             if addr == UNDEF_ADDR {
                 raw_chunks.push((linear_idx, None));
             } else if pipeline.is_some() {
-                raw_chunks.push((linear_idx, Some(self.handle.read_at_most(addr, chunk_bytes as usize * 2)?)));
+                raw_chunks.push((
+                    linear_idx,
+                    Some(self.handle.read_at_most(addr, chunk_bytes as usize * 2)?),
+                ));
             } else {
-                raw_chunks.push((linear_idx, Some(self.handle.read_at(addr, chunk_bytes as usize)?)));
+                raw_chunks.push((
+                    linear_idx,
+                    Some(self.handle.read_at(addr, chunk_bytes as usize)?),
+                ));
             }
         }
 
@@ -833,14 +892,26 @@ impl Hdf5Reader {
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
-                raw_chunks.into_par_iter()
-                    .map(|(idx, raw)| (idx, raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r))))
+                raw_chunks
+                    .into_par_iter()
+                    .map(|(idx, raw)| {
+                        (
+                            idx,
+                            raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r)),
+                        )
+                    })
                     .collect()
             }
             #[cfg(not(feature = "parallel"))]
             {
-                raw_chunks.into_iter()
-                    .map(|(idx, raw)| (idx, raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r))))
+                raw_chunks
+                    .into_iter()
+                    .map(|(idx, raw)| {
+                        (
+                            idx,
+                            raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r)),
+                        )
+                    })
                     .collect()
             }
         } else {
@@ -872,7 +943,8 @@ impl Hdf5Reader {
     ) -> IoResult<Vec<u8>> {
         use hdf5_format::chunk_index::btree_v2::*;
 
-        let info = self.dataset_info(name)
+        let info = self
+            .dataset_info(name)
             .ok_or_else(|| crate::IoError::NotFound(name.to_string()))?;
         let dims = info.dataspace.dims.clone();
         let element_size = info.datatype.element_size() as u64;
@@ -899,11 +971,8 @@ impl Hdf5Reader {
 
         // Read leaf node
         let leaf_buf = self.handle.read_at_most(bt2_hdr.root_node_addr, 65536)?;
-        let leaf = Bt2LeafNode::decode(
-            &leaf_buf,
-            bt2_hdr.num_records_in_root,
-            bt2_hdr.record_size,
-        )?;
+        let leaf =
+            Bt2LeafNode::decode(&leaf_buf, bt2_hdr.num_records_in_root, bt2_hdr.record_size)?;
 
         // Decode records
         let records = if bt2_hdr.record_type == BT2_TYPE_CHUNK_UNFILT {
@@ -932,9 +1001,21 @@ impl Hdf5Reader {
             if rec.chunk_address == UNDEF_ADDR {
                 raw_chunks.push((i, None));
             } else if pipeline.is_some() {
-                raw_chunks.push((i, Some(self.handle.read_at_most(rec.chunk_address, chunk_bytes as usize * 2)?)));
+                raw_chunks.push((
+                    i,
+                    Some(
+                        self.handle
+                            .read_at_most(rec.chunk_address, chunk_bytes as usize * 2)?,
+                    ),
+                ));
             } else {
-                raw_chunks.push((i, Some(self.handle.read_at(rec.chunk_address, chunk_bytes as usize)?)));
+                raw_chunks.push((
+                    i,
+                    Some(
+                        self.handle
+                            .read_at(rec.chunk_address, chunk_bytes as usize)?,
+                    ),
+                ));
             }
         }
 
@@ -943,13 +1024,15 @@ impl Hdf5Reader {
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
-                raw_chunks.into_par_iter()
+                raw_chunks
+                    .into_par_iter()
                     .map(|(i, raw)| (i, raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r))))
                     .collect()
             }
             #[cfg(not(feature = "parallel"))]
             {
-                raw_chunks.into_iter()
+                raw_chunks
+                    .into_iter()
                     .map(|(i, raw)| (i, raw.map(|r| filter::reverse_filters(pl, &r).unwrap_or(r))))
                     .collect()
             }
@@ -959,7 +1042,14 @@ impl Hdf5Reader {
 
         for (i, chunk_data) in &decompressed {
             let Some(data) = chunk_data else { continue };
-            self.copy_chunk_to_output(data, &mut output, &dims, chunk_dims, &records[*i].scaled_offsets, element_size);
+            self.copy_chunk_to_output(
+                data,
+                &mut output,
+                &dims,
+                chunk_dims,
+                &records[*i].scaled_offsets,
+                element_size,
+            );
         }
 
         Ok(output)
@@ -983,10 +1073,8 @@ impl Hdf5Reader {
         // For 1D case, direct memcpy
         if ndims == 1 {
             let start = chunk_coords[0] * chunk_dims[0] * element_size;
-            let actual_elems = std::cmp::min(
-                chunk_dims[0],
-                dims[0] - chunk_coords[0] * chunk_dims[0],
-            );
+            let actual_elems =
+                std::cmp::min(chunk_dims[0], dims[0] - chunk_coords[0] * chunk_dims[0]);
             let copy_bytes = (actual_elems * element_size) as usize;
             let start = start as usize;
             if start + copy_bytes <= output.len() && copy_bytes <= chunk_data.len() {
@@ -1045,7 +1133,8 @@ impl Hdf5Reader {
     ///
     /// Returns a Vec<String> with one entry per element.
     pub fn read_vlen_strings(&mut self, name: &str) -> IoResult<Vec<String>> {
-        let info = self.dataset_info(name)
+        let info = self
+            .dataset_info(name)
             .ok_or_else(|| crate::IoError::NotFound(name.to_string()))?;
         let dims = info.dataspace.dims.clone();
         let layout = info.layout.clone();
@@ -1053,7 +1142,9 @@ impl Hdf5Reader {
 
         let raw = match &layout {
             DataLayoutMessage::Contiguous { address, size } => {
-                if *address == UNDEF_ADDR { return Ok(vec![]); }
+                if *address == UNDEF_ADDR {
+                    return Ok(vec![]);
+                }
                 self.handle.read_at(*address, *size as usize)?
             }
             DataLayoutMessage::Compact { data } => data.clone(),
@@ -1076,8 +1167,7 @@ impl Hdf5Reader {
                 break;
             }
 
-            let (collection_addr, obj_index) =
-                decode_vlen_reference(&raw[offset..], &self.ctx)?;
+            let (collection_addr, obj_index) = decode_vlen_reference(&raw[offset..], &self.ctx)?;
 
             if collection_addr == UNDEF_ADDR || collection_addr == 0 {
                 strings.push(String::new());
@@ -1118,17 +1208,27 @@ impl Hdf5Reader {
     ) -> IoResult<Vec<(u64, u64)>> {
         use hdf5_format::chunk_index::extensible_array::{self as ea, *};
 
-        if index_address == UNDEF_ADDR { return Ok(vec![]); }
+        if index_address == UNDEF_ADDR {
+            return Ok(vec![]);
+        }
 
         let hdr_buf = self.handle.read_at_most(index_address, 256)?;
         let ea_hdr = ExtensibleArrayHeader::decode(&hdr_buf, &self.ctx)?;
-        if ea_hdr.idx_blk_addr == UNDEF_ADDR { return Ok(vec![]); }
+        if ea_hdr.idx_blk_addr == UNDEF_ADDR {
+            return Ok(vec![]);
+        }
 
-        let chunks_dim0 = if chunk_dims[0] > 0 { dims[0].div_ceil(chunk_dims[0]) } else { 0 };
+        let chunks_dim0 = if chunk_dims[0] > 0 {
+            dims[0].div_ceil(chunk_dims[0])
+        } else {
+            0
+        };
         let ndblk_addrs = compute_ndblk_addrs(params.sup_blk_min_data_ptrs);
         let nsblk_addrs = compute_nsblk_addrs(
-            params.idx_blk_elmts, params.data_blk_min_elmts,
-            params.sup_blk_min_data_ptrs, params.max_nelmts_bits,
+            params.idx_blk_elmts,
+            params.data_blk_min_elmts,
+            params.sup_blk_min_data_ptrs,
+            params.max_nelmts_bits,
         );
         let chunk_bytes = chunk_dims.iter().product::<u64>() * element_size;
         let is_filtered = ea_hdr.class_id == ea::EA_CLS_FILT_CHUNK;
@@ -1139,10 +1239,16 @@ impl Hdf5Reader {
             let chunk_size_len = ea_hdr.raw_elmt_size - self.ctx.sizeof_addr - 4;
             let iblk_buf = self.handle.read_at_most(ea_hdr.idx_blk_addr, 65536)?;
             let fiblk = ea::FilteredIndexBlock::decode(
-                &iblk_buf, &self.ctx, params.idx_blk_elmts as usize,
-                ndblk_addrs, nsblk_addrs, chunk_size_len,
+                &iblk_buf,
+                &self.ctx,
+                params.idx_blk_elmts as usize,
+                ndblk_addrs,
+                nsblk_addrs,
+                chunk_size_len,
             )?;
-            for e in &fiblk.elements { entries.push((e.addr, e.nbytes)); }
+            for e in &fiblk.elements {
+                entries.push((e.addr, e.nbytes));
+            }
             let mut nelmts = min_elmts;
             let mut pair = 0usize;
             for &dblk_addr in &fiblk.dblk_addrs {
@@ -1150,19 +1256,38 @@ impl Hdf5Reader {
                     entries.extend(std::iter::repeat_n((UNDEF_ADDR, 0), nelmts));
                 } else {
                     let buf = self.handle.read_at_most(dblk_addr, 65536)?;
-                    let dblk = ea::FilteredDataBlock::decode(&buf, &self.ctx, params.max_nelmts_bits, nelmts, chunk_size_len)?;
-                    for e in &dblk.elements { entries.push((e.addr, e.nbytes)); }
+                    let dblk = ea::FilteredDataBlock::decode(
+                        &buf,
+                        &self.ctx,
+                        params.max_nelmts_bits,
+                        nelmts,
+                        chunk_size_len,
+                    )?;
+                    for e in &dblk.elements {
+                        entries.push((e.addr, e.nbytes));
+                    }
                 }
-                if entries.len() >= chunks_dim0 as usize { break; }
+                if entries.len() >= chunks_dim0 as usize {
+                    break;
+                }
                 pair += 1;
-                if pair >= 2 { pair = 0; nelmts *= 2; }
+                if pair >= 2 {
+                    pair = 0;
+                    nelmts *= 2;
+                }
             }
         } else {
             let iblk_buf = self.handle.read_at_most(ea_hdr.idx_blk_addr, 8192)?;
             let iblk = ExtensibleArrayIndexBlock::decode(
-                &iblk_buf, &self.ctx, params.idx_blk_elmts as usize, ndblk_addrs, nsblk_addrs,
+                &iblk_buf,
+                &self.ctx,
+                params.idx_blk_elmts as usize,
+                ndblk_addrs,
+                nsblk_addrs,
             )?;
-            for &addr in &iblk.elements { entries.push((addr, chunk_bytes)); }
+            for &addr in &iblk.elements {
+                entries.push((addr, chunk_bytes));
+            }
             let mut nelmts = min_elmts;
             let mut pair = 0usize;
             for &dblk_addr in &iblk.dblk_addrs {
@@ -1170,12 +1295,24 @@ impl Hdf5Reader {
                     entries.extend(std::iter::repeat_n((UNDEF_ADDR, 0), nelmts));
                 } else {
                     let buf = self.handle.read_at_most(dblk_addr, 65536)?;
-                    let dblk = ExtensibleArrayDataBlock::decode(&buf, &self.ctx, params.max_nelmts_bits, nelmts)?;
-                    for &addr in &dblk.elements { entries.push((addr, chunk_bytes)); }
+                    let dblk = ExtensibleArrayDataBlock::decode(
+                        &buf,
+                        &self.ctx,
+                        params.max_nelmts_bits,
+                        nelmts,
+                    )?;
+                    for &addr in &dblk.elements {
+                        entries.push((addr, chunk_bytes));
+                    }
                 }
-                if entries.len() >= chunks_dim0 as usize { break; }
+                if entries.len() >= chunks_dim0 as usize {
+                    break;
+                }
                 pair += 1;
-                if pair >= 2 { pair = 0; nelmts *= 2; }
+                if pair >= 2 {
+                    pair = 0;
+                    nelmts *= 2;
+                }
             }
         }
         Ok(entries)
@@ -1186,13 +1323,9 @@ impl Hdf5Reader {
     /// `starts` and `counts` define the N-dimensional selection:
     /// starts[d] is the first index along dim d, counts[d] is how many.
     /// Returns the selected data in row-major order.
-    pub fn read_slice(
-        &mut self,
-        name: &str,
-        starts: &[u64],
-        counts: &[u64],
-    ) -> IoResult<Vec<u8>> {
-        let info = self.dataset_info(name)
+    pub fn read_slice(&mut self, name: &str, starts: &[u64], counts: &[u64]) -> IoResult<Vec<u8>> {
+        let info = self
+            .dataset_info(name)
             .ok_or_else(|| crate::IoError::NotFound(name.to_string()))?;
         let dims = info.dataspace.dims.clone();
         let element_size = info.datatype.element_size() as u64;
@@ -1228,7 +1361,9 @@ impl Hdf5Reader {
                 // For 1D, simple contiguous read
                 if ndims == 1 {
                     let offset = *address + starts[0] * element_size;
-                    return self.handle.read_at(offset, (counts[0] * element_size) as usize)
+                    return self
+                        .handle
+                        .read_at(offset, (counts[0] * element_size) as usize)
                         .map_err(Into::into);
                 }
 
@@ -1269,7 +1404,11 @@ impl Hdf5Reader {
 
                 let mut output = vec![0u8; out_bytes];
                 let row_bytes = (counts[ndims - 1] * element_size) as usize;
-                let n_rows: u64 = if ndims > 1 { counts[..ndims - 1].iter().product() } else { 1 };
+                let n_rows: u64 = if ndims > 1 {
+                    counts[..ndims - 1].iter().product()
+                } else {
+                    1
+                };
 
                 let mut coords = vec![0u64; ndims.saturating_sub(1)];
                 for row in 0..n_rows {
@@ -1283,13 +1422,21 @@ impl Hdf5Reader {
 
                     for d in (0..ndims.saturating_sub(1)).rev() {
                         coords[d] += 1;
-                        if coords[d] < counts[d] { break; }
+                        if coords[d] < counts[d] {
+                            break;
+                        }
                         coords[d] = 0;
                     }
                 }
                 Ok(output)
             }
-            DataLayoutMessage::ChunkedV4 { chunk_dims: layout_chunk_dims, index_address, index_type, earray_params, .. } => {
+            DataLayoutMessage::ChunkedV4 {
+                chunk_dims: layout_chunk_dims,
+                index_address,
+                index_type,
+                earray_params,
+                ..
+            } => {
                 let real_chunk_dims = &layout_chunk_dims[..layout_chunk_dims.len() - 1];
                 let fp = pipeline.clone();
 
@@ -1301,8 +1448,11 @@ impl Hdf5Reader {
 
                 if can_optimize {
                     let all_entries = self.collect_ea_chunk_entries(
-                        *index_address, earray_params.as_ref().unwrap(),
-                        &dims, real_chunk_dims, element_size,
+                        *index_address,
+                        earray_params.as_ref().unwrap(),
+                        &dims,
+                        real_chunk_dims,
+                        element_size,
                     )?;
                     let mut output = vec![0u8; out_bytes];
                     let out_strides = compute_strides(counts, element_size);
@@ -1314,13 +1464,19 @@ impl Hdf5Reader {
                     let row_bytes = (inner_counts[inner_ndims - 1] * element_size) as usize;
                     let n_inner_rows: u64 = if inner_ndims > 1 {
                         inner_counts[..inner_ndims - 1].iter().product()
-                    } else { 1 };
+                    } else {
+                        1
+                    };
 
                     for fi in 0..counts[0] {
                         let gi = starts[0] + fi;
-                        if (gi as usize) >= all_entries.len() { break; }
+                        if (gi as usize) >= all_entries.len() {
+                            break;
+                        }
                         let (addr, nbytes) = all_entries[gi as usize];
-                        if addr == UNDEF_ADDR { continue; }
+                        if addr == UNDEF_ADDR {
+                            continue;
+                        }
 
                         let chunk_data = if let Some(ref pl) = fp {
                             let raw = self.handle.read_at(addr, nbytes as usize)?;
@@ -1331,19 +1487,24 @@ impl Hdf5Reader {
 
                         let mut ic = vec![0u64; inner_ndims.saturating_sub(1)];
                         for _irow in 0..n_inner_rows {
-                            let mut src_off = (inner_starts[inner_ndims - 1] * element_size) as usize;
+                            let mut src_off =
+                                (inner_starts[inner_ndims - 1] * element_size) as usize;
                             let mut dst_off = (fi * out_strides[0]) as usize;
                             for d in 0..inner_ndims.saturating_sub(1) {
                                 src_off += ((inner_starts[d] + ic[d]) * chunk_strides[d]) as usize;
                                 dst_off += (ic[d] * out_strides[d + 1]) as usize;
                             }
-                            if src_off + row_bytes <= chunk_data.len() && dst_off + row_bytes <= output.len() {
+                            if src_off + row_bytes <= chunk_data.len()
+                                && dst_off + row_bytes <= output.len()
+                            {
                                 output[dst_off..dst_off + row_bytes]
                                     .copy_from_slice(&chunk_data[src_off..src_off + row_bytes]);
                             }
                             for d in (0..inner_ndims.saturating_sub(1)).rev() {
                                 ic[d] += 1;
-                                if ic[d] < inner_counts[d] { break; }
+                                if ic[d] < inner_counts[d] {
+                                    break;
+                                }
                                 ic[d] = 0;
                             }
                         }
@@ -1355,7 +1516,11 @@ impl Hdf5Reader {
                     let mut output = vec![0u8; out_bytes];
                     let src_strides = compute_strides(&dims, element_size);
                     let row_bytes = (counts[ndims - 1] * element_size) as usize;
-                    let n_rows: u64 = if ndims > 1 { counts[..ndims - 1].iter().product() } else { 1 };
+                    let n_rows: u64 = if ndims > 1 {
+                        counts[..ndims - 1].iter().product()
+                    } else {
+                        1
+                    };
                     if ndims == 1 {
                         let src_off = (starts[0] * element_size) as usize;
                         output[..row_bytes].copy_from_slice(&full[src_off..src_off + row_bytes]);
@@ -1373,7 +1538,9 @@ impl Hdf5Reader {
                                 .copy_from_slice(&full[src_off..src_off + row_bytes]);
                             for d in (0..ndims - 1).rev() {
                                 coords[d] += 1;
-                                if coords[d] < counts[d] { break; }
+                                if coords[d] < counts[d] {
+                                    break;
+                                }
                                 coords[d] = 0;
                             }
                         }
@@ -1388,7 +1555,9 @@ impl Hdf5Reader {
 /// Compute row-major strides for an N-dimensional array.
 fn compute_strides(dims: &[u64], element_size: u64) -> Vec<u64> {
     let ndims = dims.len();
-    if ndims == 0 { return vec![]; }
+    if ndims == 0 {
+        return vec![];
+    }
     let mut strides = vec![0u64; ndims];
     strides[ndims - 1] = element_size;
     for d in (0..ndims - 1).rev() {
@@ -1438,7 +1607,7 @@ mod tests {
         // We need to know the addresses before writing, so let's compute them.
         // Superblock: starts at 0
         let sb_size = 8 + 8 + 4 + 4 * sa + (ss + sa + 4 + 4 + 16); // sig + header + flags + 4 addrs + STE
-        // Pad to 8-byte alignment
+                                                                   // Pad to 8-byte alignment
         let sb_size_aligned = (sb_size + 7) & !7;
 
         // Root group object header (v1): after superblock
@@ -1526,7 +1695,7 @@ mod tests {
         file.extend_from_slice(&4u16.to_le_bytes()); // sym_leaf_k
         file.extend_from_slice(&32u16.to_le_bytes()); // btree_internal_k
         file.extend_from_slice(&0u32.to_le_bytes()); // file_consistency_flags
-        // base_addr
+                                                     // base_addr
         write_le(&mut file, 0, sa);
         // extension_addr = UNDEF
         write_le(&mut file, UNDEF_ADDR, sa);
@@ -1539,7 +1708,7 @@ mod tests {
         write_le(&mut file, root_ohdr_addr, sa); // obj_header_addr
         file.extend_from_slice(&1u32.to_le_bytes()); // cache_type = 1 (stab)
         file.extend_from_slice(&0u32.to_le_bytes()); // reserved
-        // scratch pad: btree_addr + heap_addr
+                                                     // scratch pad: btree_addr + heap_addr
         write_le(&mut file, btree_addr, sa);
         write_le(&mut file, heap_hdr_addr, sa);
         // Pad superblock
@@ -1555,7 +1724,7 @@ mod tests {
         file.extend_from_slice(&1u32.to_le_bytes()); // obj_ref_count
         file.extend_from_slice(&(root_ohdr_data_size as u32).to_le_bytes());
         file.extend_from_slice(&[0u8; 4]); // reserved padding (v1 alignment)
-        // Symbol table message (type 0x0011)
+                                           // Symbol table message (type 0x0011)
         file.extend_from_slice(&0x0011u16.to_le_bytes()); // type
         file.extend_from_slice(&(stab_msg_data_size as u16).to_le_bytes()); // size
         file.push(0); // flags
@@ -1596,7 +1765,7 @@ mod tests {
         file.extend_from_slice(&1u16.to_le_bytes()); // entries_used = 1
         write_le(&mut file, UNDEF_ADDR, sa); // left sibling
         write_le(&mut file, UNDEF_ADDR, sa); // right sibling
-        // key[0] = 0 (first name offset)
+                                             // key[0] = 0 (first name offset)
         write_le(&mut file, 0, ss);
         // child[0] = snod_addr
         write_le(&mut file, snod_addr, sa);
@@ -1612,7 +1781,7 @@ mod tests {
         file.push(1); // version
         file.push(0); // reserved
         file.extend_from_slice(&1u16.to_le_bytes()); // num_symbols = 1
-        // Entry: dataset
+                                                     // Entry: dataset
         write_le(&mut file, 1, ss); // name_offset = 1 (index into local heap)
         write_le(&mut file, ds_ohdr_addr, sa); // obj_header_addr
         file.extend_from_slice(&0u32.to_le_bytes()); // cache_type = 0 (not a group)
@@ -1636,7 +1805,7 @@ mod tests {
         file.extend_from_slice(&(ds_msg_data_size as u16).to_le_bytes());
         file.push(0); // flags
         file.extend_from_slice(&[0u8; 3]); // reserved
-        // Dataspace v1 payload:
+                                           // Dataspace v1 payload:
         file.push(1); // version = 1
         file.push(ndims as u8);
         file.push(0); // flags (no max dims)
@@ -1656,7 +1825,7 @@ mod tests {
         file.extend_from_slice(&(dt_msg_data_size as u16).to_le_bytes());
         file.push(0); // flags
         file.extend_from_slice(&[0u8; 3]); // reserved
-        // Datatype payload: class=0 (fixed point), version=1
+                                           // Datatype payload: class=0 (fixed point), version=1
         file.push(0x10); // class(0) | version(1)<<4
         file.push(0x08); // byte_order=LE, signed=true (bit 3)
         file.push(0); // flags byte 1
@@ -1674,7 +1843,7 @@ mod tests {
         file.extend_from_slice(&(dl_msg_data_size as u16).to_le_bytes());
         file.push(0); // flags
         file.extend_from_slice(&[0u8; 3]); // reserved
-        // Data layout payload:
+                                           // Data layout payload:
         file.push(3); // version = 3
         file.push(1); // class = contiguous
         write_le(&mut file, raw_data_addr, sa); // address
@@ -1778,7 +1947,8 @@ mod tests {
         assert_eq!(shape, vec![4]);
 
         let data = reader.read_dataset_raw("test").unwrap();
-        let vals: Vec<i32> = data.chunks_exact(4)
+        let vals: Vec<i32> = data
+            .chunks_exact(4)
             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         assert_eq!(vals, vec![1, 2, 3, 4]);
@@ -1794,52 +1964,90 @@ mod h5py_debug_tests {
     #[test]
     fn debug_read_h5py() {
         let path = std::path::Path::new("/tmp/test_h5py_default.h5");
-        if !path.exists() { return; }
-        
+        if !path.exists() {
+            return;
+        }
+
         let mut handle = FileHandle::open_read(path).unwrap();
         let sb_buf = handle.read_at_most(0, 1024).unwrap();
         let version = detect_superblock_version(&sb_buf).unwrap();
         eprintln!("Superblock version: {}", version);
-        
+
         let sb = SuperblockV0V1::decode(&sb_buf).unwrap();
-        eprintln!("sizeof_addr={}, sizeof_size={}", sb.sizeof_offsets, sb.sizeof_lengths);
-        eprintln!("STE: obj_header={}, cache_type={}, btree={}, heap={}",
+        eprintln!(
+            "sizeof_addr={}, sizeof_size={}",
+            sb.sizeof_offsets, sb.sizeof_lengths
+        );
+        eprintln!(
+            "STE: obj_header={}, cache_type={}, btree={}, heap={}",
             sb.root_symbol_table_entry.obj_header_addr,
             sb.root_symbol_table_entry.cache_type,
             sb.root_symbol_table_entry.btree_addr,
-            sb.root_symbol_table_entry.heap_addr);
-        
+            sb.root_symbol_table_entry.heap_addr
+        );
+
         let ctx = FormatContext {
             sizeof_addr: sb.sizeof_offsets,
             sizeof_size: sb.sizeof_lengths,
         };
-        
+
         // Read local heap
-        let heap_buf = handle.read_at_most(sb.root_symbol_table_entry.heap_addr, 128).unwrap();
-        let heap_hdr = LocalHeapHeader::decode(&heap_buf, ctx.sizeof_addr as usize, ctx.sizeof_size as usize).unwrap();
-        eprintln!("Heap data_addr={}, data_size={}", heap_hdr.data_addr, heap_hdr.data_size);
-        
-        let heap_data = handle.read_at(heap_hdr.data_addr, heap_hdr.data_size as usize).unwrap();
-        eprintln!("Heap data bytes: {:?}", &heap_data[..std::cmp::min(64, heap_data.len())]);
-        
+        let heap_buf = handle
+            .read_at_most(sb.root_symbol_table_entry.heap_addr, 128)
+            .unwrap();
+        let heap_hdr = LocalHeapHeader::decode(
+            &heap_buf,
+            ctx.sizeof_addr as usize,
+            ctx.sizeof_size as usize,
+        )
+        .unwrap();
+        eprintln!(
+            "Heap data_addr={}, data_size={}",
+            heap_hdr.data_addr, heap_hdr.data_size
+        );
+
+        let heap_data = handle
+            .read_at(heap_hdr.data_addr, heap_hdr.data_size as usize)
+            .unwrap();
+        eprintln!(
+            "Heap data bytes: {:?}",
+            &heap_data[..std::cmp::min(64, heap_data.len())]
+        );
+
         // Read btree
-        let btree_buf = handle.read_at_most(sb.root_symbol_table_entry.btree_addr, 8192).unwrap();
-        let btree = BTreeV1Node::decode(&btree_buf, ctx.sizeof_addr as usize, ctx.sizeof_size as usize).unwrap();
-        eprintln!("BTree: type={}, level={}, entries={}, children={:?}", 
-            btree.node_type, btree.level, btree.entries_used, btree.children);
-        
+        let btree_buf = handle
+            .read_at_most(sb.root_symbol_table_entry.btree_addr, 8192)
+            .unwrap();
+        let btree = BTreeV1Node::decode(
+            &btree_buf,
+            ctx.sizeof_addr as usize,
+            ctx.sizeof_size as usize,
+        )
+        .unwrap();
+        eprintln!(
+            "BTree: type={}, level={}, entries={}, children={:?}",
+            btree.node_type, btree.level, btree.entries_used, btree.children
+        );
+
         // Read SNOD
         for &child in &btree.children {
             let snod_buf = handle.read_at_most(child, 8192).unwrap();
-            let snod = SymbolTableNode::decode(&snod_buf, ctx.sizeof_addr as usize, ctx.sizeof_size as usize).unwrap();
+            let snod = SymbolTableNode::decode(
+                &snod_buf,
+                ctx.sizeof_addr as usize,
+                ctx.sizeof_size as usize,
+            )
+            .unwrap();
             eprintln!("SNOD at {}: {} entries", child, snod.entries.len());
             for entry in &snod.entries {
                 let name = local_heap_get_string(&heap_data, entry.name_offset).unwrap();
-                eprintln!("  entry: name='{}' (offset={}), obj_header={}, cache_type={}",
-                    name, entry.name_offset, entry.obj_header_addr, entry.cache_type);
+                eprintln!(
+                    "  entry: name='{}' (offset={}), obj_header={}, cache_type={}",
+                    name, entry.name_offset, entry.obj_header_addr, entry.cache_type
+                );
             }
         }
-        
+
         // Try full open
         let reader = Hdf5Reader::open(path).unwrap();
         eprintln!("Datasets found: {:?}", reader.dataset_names());

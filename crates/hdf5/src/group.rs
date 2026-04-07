@@ -19,7 +19,7 @@
 
 use crate::dataset::DatasetBuilder;
 use crate::error::{Hdf5Error, Result};
-use crate::file::{H5FileInner, SharedInner, borrow_inner, borrow_inner_mut, clone_inner};
+use crate::file::{borrow_inner, borrow_inner_mut, clone_inner, H5FileInner, SharedInner};
 use crate::types::H5Type;
 
 /// A handle to an HDF5 group.
@@ -99,7 +99,10 @@ impl H5Group {
             } else {
                 format!("{}/", full_name.trim_start_matches('/'))
             };
-            let has_children = reader.dataset_names().iter().any(|n| n.starts_with(&prefix));
+            let has_children = reader
+                .dataset_names()
+                .iter()
+                .any(|n| n.starts_with(&prefix));
             if !has_children {
                 return Err(Hdf5Error::NotFound(full_name));
             }
@@ -116,12 +119,16 @@ impl H5Group {
     pub fn dataset_names(&self) -> Result<Vec<String>> {
         let inner = borrow_inner(&self.file_inner);
         let all_names = match &*inner {
-            H5FileInner::Reader(reader) => {
-                reader.dataset_names().iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            }
-            H5FileInner::Writer(writer) => {
-                writer.dataset_names().iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            }
+            H5FileInner::Reader(reader) => reader
+                .dataset_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            H5FileInner::Writer(writer) => writer
+                .dataset_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
             H5FileInner::Closed => return Ok(vec![]),
         };
 
@@ -152,12 +159,16 @@ impl H5Group {
     pub fn group_names(&self) -> Result<Vec<String>> {
         let inner = borrow_inner(&self.file_inner);
         let all_names = match &*inner {
-            H5FileInner::Reader(reader) => {
-                reader.dataset_names().iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            }
-            H5FileInner::Writer(writer) => {
-                writer.dataset_names().iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            }
+            H5FileInner::Reader(reader) => reader
+                .dataset_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            H5FileInner::Writer(writer) => writer
+                .dataset_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
             H5FileInner::Closed => return Ok(vec![]),
         };
 
