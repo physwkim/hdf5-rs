@@ -1,5 +1,8 @@
 //! Zstandard format constants, tables, and symbol coding definitions.
-//! Ported from zstd C source (lib/common/zstd_internal.h, decompress_internal.h).
+//!
+//! Ported from the zstd C library by Meta Platforms, Inc.
+//! Original source: lib/common/zstd_internal.h, decompress/zstd_decompress_internal.h
+//! Licensed under BSD and GPLv2 (dual license). See LICENSE-ZSTD.
 
 pub const ZSTD_MAGIC: u32 = 0xFD2FB528;
 pub const ZSTD_BLOCKSIZELOG_MAX: u32 = 17;
