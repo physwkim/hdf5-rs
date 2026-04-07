@@ -178,10 +178,8 @@ fn compress_block(data: &[u8], params: &MatchParams) -> Option<Vec<u8>> {
         return None;
     }
 
-    // === 1. Convert to encoded sequences (no repeat offset for now) ===
-    let encoded_seqs: Vec<EncodedSequence> = sequences.iter()
-        .map(|s| EncodedSequence { ll: s.ll, of_value: s.off + 3, ml: s.ml })
-        .collect();
+    // === 1. Resolve repeat offsets per zstd spec ===
+    let encoded_seqs = resolve_repeat_offsets(&sequences);
 
     // === 2. Collect literals ===
     let mut literals = Vec::with_capacity(data.len());
@@ -215,11 +213,19 @@ fn compress_block(data: &[u8], params: &MatchParams) -> Option<Vec<u8>> {
     Some(block)
 }
 
-/// Resolve repeat offsets: convert raw offsets to zstd offset values.
-/// offset_value 1 = repeat offset 1, 2 = repeat offset 2, 3 = repeat offset 3.
-/// offset_value > 3 = new offset (raw_offset + 3).
+/// Resolve repeat offsets per zstd spec (RFC 8878 §3.1.2.5).
+///
+/// Encoder chooses offset_value for each sequence:
+/// - If raw_offset matches a repeat offset → use repcode (1/2/3)
+/// - Otherwise → use raw_offset + 3
+///
+/// After each sequence, the repeat offset table is updated:
+/// - New offset → shift: rep = [new, old_rep0, old_rep1]
+/// - Repeat 1 → no change
+/// - Repeat 2 → rotate: rep = [rep1, rep0, rep2]
+/// - Repeat 3 → rotate: rep = [rep2, rep0, rep1]
 fn resolve_repeat_offsets(sequences: &[Sequence]) -> Vec<EncodedSequence> {
-    let mut rep = [1u32, 4, 8]; // initial repeat offsets per zstd spec
+    let mut rep = [1u32, 4, 8]; // initial repeat offsets
     let mut out = Vec::with_capacity(sequences.len());
 
     for seq in sequences {
@@ -227,45 +233,38 @@ fn resolve_repeat_offsets(sequences: &[Sequence]) -> Vec<EncodedSequence> {
         let of_value;
 
         if seq.ll > 0 {
-            // Normal case: check if raw_off matches a repeat offset
+            // Normal case (ll > 0)
             if raw_off == rep[0] {
                 of_value = 1;
+                // rep unchanged
             } else if raw_off == rep[1] {
                 of_value = 2;
-                rep[1] = rep[0];
-                rep[0] = raw_off;
+                // rotate: [rep1, rep0, rep2]
+                rep = [rep[1], rep[0], rep[2]];
             } else if raw_off == rep[2] {
                 of_value = 3;
-                rep[2] = rep[1];
-                rep[1] = rep[0];
-                rep[0] = raw_off;
+                // rotate: [rep2, rep0, rep1]
+                rep = [rep[2], rep[0], rep[1]];
             } else {
                 of_value = raw_off + 3;
-                rep[2] = rep[1];
-                rep[1] = rep[0];
-                rep[0] = raw_off;
+                // shift: [new, old0, old1]
+                rep = [raw_off, rep[0], rep[1]];
             }
         } else {
-            // ll == 0: repeat offset rules differ
-            // of_value 1 = rep[0] (same as before)
-            // of_value 2 = rep[1], of_value 3 = rep[2]
-            // of_value 4 = rep[0] - 1
-            if raw_off == rep[0] {
+            // ll == 0: offsets are shifted by 1
+            // of_value 1 → rep[1], of_value 2 → rep[2], of_value 3 → rep[0]-1
+            if raw_off == rep[1] {
                 of_value = 1;
-            } else if raw_off == rep[1] {
-                of_value = 2;
-                rep[1] = rep[0];
-                rep[0] = raw_off;
+                rep = [rep[1], rep[0], rep[2]];
             } else if raw_off == rep[2] {
+                of_value = 2;
+                rep = [rep[2], rep[0], rep[1]];
+            } else if raw_off == rep[0].wrapping_sub(1) && rep[0] > 1 {
                 of_value = 3;
-                rep[2] = rep[1];
-                rep[1] = rep[0];
-                rep[0] = raw_off;
+                rep = [rep[0] - 1, rep[0], rep[1]];
             } else {
                 of_value = raw_off + 3;
-                rep[2] = rep[1];
-                rep[1] = rep[0];
-                rep[0] = raw_off;
+                rep = [raw_off, rep[0], rep[1]];
             }
         }
 
@@ -541,17 +540,184 @@ fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -
     if weights.iter().any(|&w| w > 12) { return vec![]; }
 
     let num = weights.len();
-    let mut desc = Vec::with_capacity(1 + num.div_ceil(2));
-    // Direct mode header: num_weights + 127 (when <= 128)
-    // If > 128, we'd need FSE compression — skip for now
-    if num > 128 { return vec![]; }
-    desc.push((num as u8) + 127);
-    for pair in weights.chunks(2) {
-        let w0 = pair[0];
-        let w1 = if pair.len() > 1 { pair[1] } else { 0 };
-        desc.push((w0 << 4) | (w1 & 0x0F));
+
+    if num <= 128 {
+        // Direct mode: header = num + 127, packed 4-bit pairs
+        let mut desc = Vec::with_capacity(1 + num.div_ceil(2));
+        desc.push((num as u8) + 127);
+        for pair in weights.chunks(2) {
+            let w0 = pair[0];
+            let w1 = if pair.len() > 1 { pair[1] } else { 0 };
+            desc.push((w0 << 4) | (w1 & 0x0F));
+        }
+        desc
+    } else {
+        // >128 weights: FSE-compressed weight encoding.
+        // TODO: BackwardBitWriter needs MSB-first layout matching BIT_CStream_t
+        // to produce correct interleaved FSE bitstream for the decoder.
+        // For now, fall back to raw literals for blocks with >128 distinct symbols.
+        vec![]
     }
-    desc
+}
+
+/// FSE-compress weights using 2-stream interleaved encoding.
+///
+/// Decoder reads: sentinel → init_state(dec1) → init_state(dec2) →
+/// loop { dec1.decode + update, dec2.decode + update } until exhausted.
+///
+/// Encoder writes backward: data pairs → state2 → state1 → sentinel.
+/// After bw.finish() (reverse + sentinel), decoder reads correctly.
+fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
+    let mut counts = [0u32; 13];
+    let mut max_w = 0u8;
+    for &w in weights { counts[w as usize] += 1; if w > max_w { max_w = w; } }
+    if max_w == 0 { return None; }
+
+    let table_log = 6u32;
+    let table_size = 1u32 << table_log;
+    let total = weights.len() as u32;
+
+    // Normalize
+    let mut norm = [0i16; 13];
+    let mut dist = 0u32;
+    for s in 0..=max_w as usize {
+        if counts[s] == 0 { continue; }
+        norm[s] = std::cmp::max(1, (counts[s] as u64 * table_size as u64 / total as u64) as i16);
+        dist += norm[s] as u32;
+    }
+    while dist > table_size {
+        for s in 0..=max_w as usize { if norm[s] > 1 { norm[s] -= 1; dist -= 1; break; } }
+    }
+    while dist < table_size {
+        let best = (0..=max_w as usize).max_by_key(|&s| counts[s]).unwrap_or(0);
+        norm[best] += 1; dist += 1;
+    }
+
+    let fse = super::fse::FseCTable::build(&norm, max_w as usize, table_log);
+
+    // --- FSE table header (must match decode.rs read_probabilities exactly) ---
+    // Decoder: accuracy_log = 5 + get_bits(4)
+    //          loop: max_remaining = prob_sum - counter + 1
+    //                bits_to_read = highest_bit_set(max_remaining)
+    //                read bits_to_read, apply low_threshold logic
+    //                prob = value - 1
+    let mut hdr = Vec::with_capacity(16);
+    let mut bb: u64 = (table_log - 5) as u64;
+    let mut bp = 4u32;
+    let prob_sum = table_size;
+    let mut counter = 0u32;
+
+    for s in 0..=max_w as usize {
+        if counter >= prob_sum { break; }
+        let prob = norm[s] as i32;
+        let value = (prob + 1) as u32; // prob=-1 → value=0, prob=0 → value=1, etc.
+
+        let max_remaining = prob_sum - counter + 1;
+        let bits_to_read = 32 - max_remaining.leading_zeros(); // = highest_bit_set(max_remaining)
+
+        let low_threshold = ((1u32 << bits_to_read) - 1) - max_remaining;
+        let _mask = (1u32 << (bits_to_read - 1)) - 1;
+
+        if value < low_threshold {
+            // Short code: write (bits_to_read - 1) bits
+            bb |= (value as u64) << bp;
+            bp += bits_to_read - 1;
+        } else {
+            // Long code: write bits_to_read bits
+            // Decoder reads bits_to_read, checks small_value = unchecked & mask
+            // If small_value >= low_threshold, uses unchecked - low_threshold
+            // If unchecked > mask, uses unchecked - low_threshold
+            // We need: when decoder reads our bits_to_read bits, it reconstructs `value`.
+            let encoded = if value >= low_threshold {
+                value + low_threshold
+            } else {
+                value
+            };
+            bb |= (encoded as u64) << bp;
+            bp += bits_to_read;
+        }
+
+        while bp >= 8 { hdr.push(bb as u8); bb >>= 8; bp -= 8; }
+
+        if prob > 0 { counter += prob as u32; }
+        else if prob == -1 { counter += 1; }
+        // prob == 0 doesn't contribute to counter
+    }
+    if bp > 0 { hdr.push(bb as u8); }
+
+    // --- 2-stream interleaved backward bitstream ---
+    let _n = weights.len();
+    let mut bw = super::bitstream::BackwardBitWriter::new();
+
+    // Decoder reads:
+    //   1. sentinel (1-bit + padding zeros)
+    //   2. dec1.init_state (table_log bits)
+    //   3. dec2.init_state (table_log bits)
+    //   4. loop: dec1.decode_symbol, dec1.update_state(num_bits),
+    //            dec2.decode_symbol, dec2.update_state(num_bits), ...
+    //
+    // decode_symbol reads nothing (just returns state.symbol).
+    // update_state reads state.num_bits bits → new_state = base_line + bits_read.
+    //
+    // Encoder must write in reverse:
+    //   First: update_state bits for early symbols
+    //   ...
+    //   Last: init states → sentinel
+    //
+    // The FSE CTable.encode_symbol(state, sym) returns:
+    //   (bits_out, num_bits, new_state)
+    // where bits_out are the low bits of the OLD state.
+    // This corresponds to what update_state reads.
+
+    // Split: stream1 = w[0],w[2],w[4],... stream2 = w[1],w[3],w[5],...
+    let stream1: Vec<u8> = weights.iter().step_by(2).copied().collect();
+    let stream2: Vec<u8> = weights.iter().skip(1).step_by(2).copied().collect();
+
+    // Init states from last symbols of each stream
+    let mut st1 = fse.init_state(*stream1.last().unwrap() as usize);
+    let mut st2 = fse.init_state(*stream2.last().unwrap() as usize);
+
+    // Encode in reverse order, alternating stream2 then stream1
+    // (because decoder reads stream1 first after init)
+    let len1 = stream1.len();
+    let len2 = stream2.len();
+
+    // Process from second-to-last down to first
+    // Decoder processes: s1[0], s2[0], s1[1], s2[1], ...
+    // Last s1 and s2 are init'd, not update'd.
+    // So encode s1[len1-2]..s1[0] and s2[len2-2]..s2[0]
+
+    // Interleave: for each pair index going backward
+    let max_idx = std::cmp::max(len1, len2);
+    for i in (0..max_idx - 1).rev() {
+        // stream2 update comes before stream1 in bitstream
+        // (decoder reads s1 update first, then s2 update)
+        // backward → write s2 first (will be read second)
+        if i < len2 - 1 {
+            let (bits, nb, ns) = fse.encode_symbol(st2, stream2[i] as usize);
+            bw.add_bits(bits as u64, nb);
+            bw.flush_bits();
+            st2 = ns;
+        }
+        if i < len1 - 1 {
+            let (bits, nb, ns) = fse.encode_symbol(st1, stream1[i] as usize);
+            bw.add_bits(bits as u64, nb);
+            bw.flush_bits();
+            st1 = ns;
+        }
+    }
+
+    // Write init states: dec2 state then dec1 state
+    // (dec1 is read first from bitstream front → written last)
+    bw.add_bits(st2 as u64, table_log);
+    bw.flush_bits();
+    bw.add_bits(st1 as u64, table_log);
+    bw.flush_bits();
+
+    let bitstream = bw.finish();
+    let mut out = hdr;
+    out.extend_from_slice(&bitstream);
+    Some(out)
 }
 
 /// Encode one Huffman stream (symbols in reverse, padded with sentinel bit).
@@ -737,3 +903,4 @@ mod tests {
         }
     }
 }
+
