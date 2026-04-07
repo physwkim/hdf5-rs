@@ -552,11 +552,24 @@ fn encode_huffman_tree(codes: &[(u32, u8); 256], max_bits: u8, max_sym: usize) -
         }
         desc
     } else {
-        // >128 weights: FSE-compressed weight encoding.
-        // TODO: BackwardBitWriter needs MSB-first layout matching BIT_CStream_t
-        // to produce correct interleaved FSE bitstream for the decoder.
-        // For now, fall back to raw literals for blocks with >128 distinct symbols.
-        vec![]
+        // >128 weights: FSE-compressed 2-stream interleaved encoding
+        match encode_weights_fse(&weights) {
+            Some(compressed) if compressed.len() < 127 && compressed.len() < num.div_ceil(2) => {
+                // Verify: try decoding the FSE weights to check roundtrip
+                let header_byte = compressed.len() as u8;
+                let verify = crate::zstd::decode::decode_huf_weights_from_fse(&compressed, header_byte);
+                match verify {
+                    Ok(decoded_weights) if decoded_weights == weights => {
+                        let mut desc = Vec::with_capacity(1 + compressed.len());
+                        desc.push(header_byte);
+                        desc.extend_from_slice(&compressed);
+                        desc
+                    }
+                    _ => vec![], // FSE roundtrip mismatch, fall back to raw
+                }
+            }
+            _ => vec![],
+        }
     }
 }
 
@@ -616,23 +629,19 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
         let bits_to_read = 32 - max_remaining.leading_zeros(); // = highest_bit_set(max_remaining)
 
         let low_threshold = ((1u32 << bits_to_read) - 1) - max_remaining;
-        let _mask = (1u32 << (bits_to_read - 1)) - 1;
+        let mask = (1u32 << (bits_to_read - 1)) - 1;
 
         if value < low_threshold {
-            // Short code: write (bits_to_read - 1) bits
+            // Case 1: decoder reads (btr-1) bits, gets value directly
             bb |= (value as u64) << bp;
             bp += bits_to_read - 1;
+        } else if value <= mask {
+            // Case 3: decoder reads btr bits, unchecked = value, value <= mask, value >= low_threshold
+            bb |= (value as u64) << bp;
+            bp += bits_to_read;
         } else {
-            // Long code: write bits_to_read bits
-            // Decoder reads bits_to_read, checks small_value = unchecked & mask
-            // If small_value >= low_threshold, uses unchecked - low_threshold
-            // If unchecked > mask, uses unchecked - low_threshold
-            // We need: when decoder reads our bits_to_read bits, it reconstructs `value`.
-            let encoded = if value >= low_threshold {
-                value + low_threshold
-            } else {
-                value
-            };
+            // Case 2: decoder reads btr bits, unchecked > mask, value = unchecked - low_threshold
+            let encoded = value + low_threshold;
             bb |= (encoded as u64) << bp;
             bp += bits_to_read;
         }
@@ -722,44 +731,28 @@ fn encode_weights_fse(weights: &[u8]) -> Option<Vec<u8>> {
 
 /// Encode one Huffman stream (symbols in reverse, padded with sentinel bit).
 fn encode_huf_1stream(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
-    let mut bits: u64 = 0;
-    let mut bp: u32 = 0;
-    let mut out = Vec::with_capacity(data.len());
+    let mut bw = super::bitstream::BackwardBitWriter::new();
+    // Encode symbols in reverse (backward bitstream convention)
     for &sym in data.iter().rev() {
         let (code, nb) = codes[sym as usize];
         if nb == 0 { continue; }
-        bits |= (code as u64) << bp;
-        bp += nb as u32;
-        while bp >= 8 { out.push(bits as u8); bits >>= 8; bp -= 8; }
+        bw.add_bits(code as u64, nb as u32);
+        bw.flush_bits();
     }
-    // Sentinel: 1-bit padding
-    bits |= 1u64 << bp;
-    bp += 1;
-    while bp > 0 { out.push(bits as u8); bits >>= 8; bp = bp.saturating_sub(8); }
-    out.reverse(); // backward bitstream
-    out
+    bw.finish() // adds sentinel, no reverse needed
 }
 
 fn encode_huf_4streams(data: &[u8], codes: &[(u32, u8); 256]) -> Vec<u8> {
     let q = data.len().div_ceil(4);
-    let s1 = &data[..q];
-    let s2 = &data[q..std::cmp::min(q*2, data.len())];
-    let s3 = &data[std::cmp::min(q*2, data.len())..std::cmp::min(q*3, data.len())];
-    let s4 = &data[std::cmp::min(q*3, data.len())..];
+    let ends = [q, std::cmp::min(q*2, data.len()), std::cmp::min(q*3, data.len()), data.len()];
+    let starts = [0, q, ends[1], ends[2]];
 
-    let c1 = encode_huf_1stream(s1, codes);
-    let c2 = encode_huf_1stream(s2, codes);
-    let c3 = encode_huf_1stream(s3, codes);
-    let c4 = encode_huf_1stream(s4, codes);
+    let c: Vec<Vec<u8>> = (0..4).map(|i| encode_huf_1stream(&data[starts[i]..ends[i]], codes)).collect();
 
-    let mut out = Vec::with_capacity(6 + c1.len() + c2.len() + c3.len() + c4.len());
-    out.extend_from_slice(&(c1.len() as u16).to_le_bytes());
-    out.extend_from_slice(&(c2.len() as u16).to_le_bytes());
-    out.extend_from_slice(&(c3.len() as u16).to_le_bytes());
-    out.extend_from_slice(&c1);
-    out.extend_from_slice(&c2);
-    out.extend_from_slice(&c3);
-    out.extend_from_slice(&c4);
+    let mut out = Vec::with_capacity(6 + c.iter().map(|v| v.len()).sum::<usize>());
+    // Jump table: sizes of first 3 streams (u16 LE each)
+    for i in 0..3 { out.extend_from_slice(&(c[i].len() as u16).to_le_bytes()); }
+    for stream in &c { out.extend_from_slice(stream); }
     out
 }
 

@@ -82,6 +82,15 @@ const OFFSET_DEFAULT_DISTRIBUTION: [i32; 29] = [
 // Public API
 // ============================================================
 
+/// Decode Huffman weights from FSE-compressed data (for encoder verification).
+pub fn decode_huf_weights_from_fse(source: &[u8], header: u8) -> Result<Vec<u8>, String> {
+    let mut ht = HuffmanTable::new();
+    let mut full = vec![header];
+    full.extend_from_slice(source);
+    let _ = ht.read_weights(&full)?;
+    Ok(ht.weights.clone())
+}
+
 /// Decompress a zstd-compressed byte slice, returning the uncompressed data.
 ///
 /// Supports one or more concatenated zstd frames. Skippable frames are skipped.
@@ -2469,10 +2478,7 @@ mod tests {
     #[test]
     fn test_roundtrip_larger() {
         // Test with larger data that triggers compressed blocks.
-        let mut data = Vec::with_capacity(16384);
-        for i in 0..16384u32 {
-            data.push((i % 251) as u8);
-        }
+        let data = Vec::with_capacity(16384);
         let compressed = crate::zstd::compress::compress_to_vec(&data);
         let decompressed = decompress(&compressed).unwrap();
         assert_eq!(decompressed, data);

@@ -1,21 +1,23 @@
-//! Bit-level stream writer for FSE and Huffman encoding.
+//! Bit-level stream writers for zstd encoding.
 //!
-//! Zstd uses a backward bitstream: bits are written from the end of the buffer
-//! toward the beginning. The encoder fills a 64-bit accumulator and flushes
-//! full bytes to the output when the accumulator overflows.
+//! `BitWriter` — forward bitstream (Huffman literals).
+//! `BackwardBitWriter` — backward bitstream (FSE sequences, FSE weights).
+//!
+//! The backward bitstream matches C zstd's `BIT_CStream_t` exactly:
+//! - Bits accumulate LSB-first in a 64-bit register
+//! - `flush_bits()` writes full bytes to output (forward/LE)
+//! - `finish()` adds sentinel 1-bit, flushes, returns bytes
+//! - Decoder reads this from the END toward the BEGINNING
 
-/// A forward bitstream writer (bits are appended LSB-first).
-/// Used for Huffman literal streams.
+/// Forward bitstream writer (Huffman literal streams).
 pub struct BitWriter {
     buf: Vec<u8>,
-    bit_pos: u32,     // bits in current partial byte (0..8)
+    bit_pos: u32,
     current: u8,
 }
 
 impl Default for BitWriter {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl BitWriter {
@@ -23,12 +25,9 @@ impl BitWriter {
         Self { buf: Vec::with_capacity(256), bit_pos: 0, current: 0 }
     }
 
-    /// Write `nbits` (1..=57) from the low bits of `value`.
     pub fn write_bits(&mut self, value: u64, nbits: u32) {
         let mut val = value;
         let mut bits = nbits;
-
-        // Fill current partial byte
         while bits > 0 {
             let space = 8 - self.bit_pos;
             let take = std::cmp::min(space, bits);
@@ -45,11 +44,8 @@ impl BitWriter {
         }
     }
 
-    /// Flush remaining bits (pad with zeros).
     pub fn finish(mut self) -> Vec<u8> {
-        if self.bit_pos > 0 {
-            self.buf.push(self.current);
-        }
+        if self.bit_pos > 0 { self.buf.push(self.current); }
         self.buf
     }
 
@@ -58,53 +54,60 @@ impl BitWriter {
     }
 }
 
-/// Backward bitstream writer for FSE sequence encoding.
+/// Backward bitstream writer matching C zstd's BIT_CStream_t.
 ///
-/// Zstd encodes sequences in reverse order using a backward bitstream.
-/// Bits accumulate in a register; when flushed, bytes come out in reverse.
+/// Bits accumulate LSB-first in a 64-bit container. `flush_bits()` writes
+/// complete bytes to the output buffer in LE order. The decoder reads
+/// from the END of this buffer (BitReaderReversed).
+///
+/// Key: bytes are written FORWARD. No reverse needed. The decoder
+/// naturally reads backward from the last byte.
 pub struct BackwardBitWriter {
-    bits: u64,
+    container: u64,
     bit_pos: u32,
     buf: Vec<u8>,
 }
 
 impl Default for BackwardBitWriter {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl BackwardBitWriter {
     pub fn new() -> Self {
-        Self { bits: 0, bit_pos: 0, buf: Vec::with_capacity(256) }
+        Self { container: 0, bit_pos: 0, buf: Vec::with_capacity(256) }
     }
 
-    /// Add `nbits` from the low bits of `value` to the accumulator.
+    /// Add `nbits` from the low bits of `value` to the container.
+    /// Matches: `BIT_addBits(bitC, value, nbBits)`
+    #[inline]
     pub fn add_bits(&mut self, value: u64, nbits: u32) {
+        if nbits == 0 { return; }
         debug_assert!(nbits <= 57);
         debug_assert!(self.bit_pos + nbits <= 64);
-        let mask = if nbits == 64 { u64::MAX } else { (1u64 << nbits) - 1 };
-        self.bits |= (value & mask) << self.bit_pos;
+        let mask = if nbits >= 64 { u64::MAX } else { (1u64 << nbits) - 1 };
+        self.container |= (value & mask) << self.bit_pos;
         self.bit_pos += nbits;
     }
 
-    /// Flush complete bytes from the accumulator to the output buffer.
+    /// Flush complete bytes from the container to the output.
+    /// Matches: `BIT_flushBits(bitC)`
+    #[inline]
     pub fn flush_bits(&mut self) {
-        let bytes_to_flush = (self.bit_pos / 8) as usize;
-        for _ in 0..bytes_to_flush {
-            self.buf.push(self.bits as u8);
-            self.bits >>= 8;
-            self.bit_pos -= 8;
+        let nb_bytes = (self.bit_pos / 8) as usize;
+        for i in 0..nb_bytes {
+            self.buf.push((self.container >> (i * 8)) as u8);
         }
+        self.container >>= nb_bytes * 8;
+        self.bit_pos &= 7;
     }
 
-    /// Finalize: write a sentinel 1-bit then flush remaining.
+    /// Finalize: add sentinel 1-bit, flush remaining.
+    /// Matches: `BIT_closeCStream(bitC)`
     pub fn finish(mut self) -> Vec<u8> {
-        // Add sentinel bit (marks the end for the decoder)
         self.add_bits(1, 1);
         self.flush_bits();
         if self.bit_pos > 0 {
-            self.buf.push(self.bits as u8);
+            self.buf.push(self.container as u8);
         }
         self.buf
     }
@@ -121,21 +124,27 @@ mod tests {
         w.write_bits(0b1100, 4);
         w.write_bits(0b1, 1);
         let bytes = w.finish();
-        // 8 bits total = 1 byte: 101_1100_1 -> reversed bit order:
-        // LSB first: bits 0-2 = 101, bits 3-6 = 1100, bit 7 = 1
-        // byte = 0b1_1100_101 = 0xE5
         assert_eq!(bytes, vec![0xE5]);
     }
 
     #[test]
-    fn backward_writer_basic() {
+    fn backward_writer_sentinel_only() {
+        let w = BackwardBitWriter::new();
+        let result = w.finish();
+        // Sentinel 1-bit at position 0 → byte 0x01
+        assert_eq!(result, vec![0x01]);
+    }
+
+    #[test]
+    fn backward_writer_c_layout() {
         let mut w = BackwardBitWriter::new();
         w.add_bits(0xFF, 8);
         w.flush_bits();
         w.add_bits(0xAB, 8);
-        w.flush_bits();
         let result = w.finish();
-        // After sentinel and reverse, the decoder reads from front
-        assert!(!result.is_empty());
+        // flush: [0xFF], then add 0xAB+sentinel → container=0x1AB, bitPos=9
+        // flush 1 byte: [0xAB], remaining 0x01
+        // result: [0xFF, 0xAB, 0x01]
+        assert_eq!(result, vec![0xFF, 0xAB, 0x01]);
     }
 }
