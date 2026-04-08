@@ -17,6 +17,7 @@ threadsafe = []
 lz4 = ["hdf5-format/lz4"]
 blosc = ["hdf5-format/blosc"]
 bzip2 = ["hdf5-format/bzip2_filter"]
+zstd = ["hdf5-format/zstd"]
 all_filters = ["hdf5-format/all_filters"]
 
 [dev-dependencies]

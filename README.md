@@ -9,14 +9,14 @@ Read and write HDF5 files with contiguous, chunked, and compressed datasets, hie
 - **Zero C dependencies** — no `libhdf5`, no `h5cc`, no system packages. Works anywhere Rust compiles.
 - **Memory safe** — Rust's type system prevents buffer overflows, use-after-free, and data races. Minimal `unsafe` only for type reinterpretation.
 - **Simple API** — fluent builder pattern instead of C-style opaque handles (`h5d_*`, `h5g_*`, ...)
-- **Batteries included** — compression codecs (deflate, LZ4) bundled as Rust crates. No plugin system needed.
+- **Batteries included** — compression codecs (deflate, LZ4, Zstandard) bundled as Rust crates. No plugin system needed.
 - **Easy cross-compilation** — all dependencies are pure Rust. No cross-compile toolchain for C libraries required.
 
 ## Features
 
 - **Read & write** — create new files, open existing files, append datasets
 - **Chunked storage** — extensible array, fixed array, B-tree v2 indices
-- **Compression** — deflate (gzip), shuffle, Fletcher-32, LZ4 filters
+- **Compression** — deflate (gzip), shuffle, Fletcher-32, LZ4, Zstandard filters
 - **Parallel compression** — per-chunk compression/decompression via rayon
 - **Groups** — hierarchical group structure with nested object headers
 - **Attributes** — string and numeric attributes on datasets and root
@@ -216,11 +216,12 @@ hdf5-rs/
 | Shuffle | built-in | — |
 | Fletcher-32 | built-in | — |
 | LZ4 | `lz4` | `lz4_flex` |
+| Zstandard | `zstd` | `rust-zstd` |
 
 ```toml
-# Enable LZ4
+# Enable LZ4 + Zstandard
 [dependencies]
-hdf5-format = { path = "crates/hdf5-format", features = ["lz4"] }
+hdf5-format = { path = "crates/hdf5-format", features = ["lz4", "zstd"] }
 ```
 
 ## Feature flags
@@ -229,6 +230,7 @@ hdf5-format = { path = "crates/hdf5-format", features = ["lz4"] }
 |---------|-------|-------------|
 | `deflate` | `hdf5-format` | Deflate compression (default) |
 | `lz4` | `hdf5-format` | LZ4 compression |
+| `zstd` | `hdf5-format` | Zstandard compression (`rust-zstd`) |
 | `parallel` | `hdf5-io` | Parallel chunk compression via rayon (default) |
 | `threadsafe` | `hdf5` | `Send + Sync` file handles (`Arc<Mutex>`) |
 | `mmap` | `hdf5-io` | Memory-mapped read-only file access |

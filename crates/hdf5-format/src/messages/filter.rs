@@ -380,13 +380,30 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             let pixels_per_block = filter.cd_values.get(2).copied().unwrap_or(32);
             let pixels_per_scanline = filter.cd_values.get(3).copied().unwrap_or(256);
             if compress {
-                crate::szip::compress(data, bits_per_pixel, pixels_per_block, pixels_per_scanline, options_mask)
-                    .map_err(|e| FormatError::InvalidData(format!("SZIP compress: {}", e)))
+                crate::szip::compress(
+                    data,
+                    bits_per_pixel,
+                    pixels_per_block,
+                    pixels_per_scanline,
+                    options_mask,
+                )
+                .map_err(|e| FormatError::InvalidData(format!("SZIP compress: {}", e)))
             } else {
                 let output_size = filter.cd_values.get(4).copied().unwrap_or(0) as usize;
-                let out_size = if output_size > 0 { output_size } else { data.len() * 4 };
-                crate::szip::decompress(data, out_size, bits_per_pixel, pixels_per_block, pixels_per_scanline, options_mask)
-                    .map_err(|e| FormatError::InvalidData(format!("SZIP decompress: {}", e)))
+                let out_size = if output_size > 0 {
+                    output_size
+                } else {
+                    data.len() * 4
+                };
+                crate::szip::decompress(
+                    data,
+                    out_size,
+                    bits_per_pixel,
+                    pixels_per_block,
+                    pixels_per_scanline,
+                    options_mask,
+                )
+                .map_err(|e| FormatError::InvalidData(format!("SZIP decompress: {}", e)))
             }
         }
         // =====================================================================
@@ -479,9 +496,22 @@ fn apply_single_filter(filter: &Filter, data: &[u8], compress: bool) -> FormatRe
             "LZ4 filter requires the 'lz4' feature".into(),
         )),
 
-        // ZSTD (32015) — not supported (EPICS does not use zstd)
+        // =====================================================================
+        // ZSTD (32015) — Zstandard compression via pure Rust rust-zstd crate
+        // =====================================================================
+        #[cfg(feature = "zstd")]
+        FILTER_ZSTD => {
+            if compress {
+                let level = filter.cd_values.first().copied().unwrap_or(3) as i32;
+                Ok(rust_zstd::compress(data, level))
+            } else {
+                rust_zstd::decompress(data)
+                    .map_err(|e| FormatError::InvalidData(format!("zstd decompress: {}", e)))
+            }
+        }
+        #[cfg(not(feature = "zstd"))]
         FILTER_ZSTD => Err(FormatError::UnsupportedFeature(
-            "ZSTD filter is not supported".into(),
+            "ZSTD filter requires the 'zstd' feature".into(),
         )),
 
         // =====================================================================

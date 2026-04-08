@@ -114,7 +114,7 @@ fn add_padding(
     pp: bool,
 ) -> Vec<u8> {
     let padded_line = line_size + padding_size;
-    let num_lines = (src.len() + line_size - 1) / line_size;
+    let num_lines = src.len().div_ceil(line_size);
     let mut dest = vec![0u8; num_lines * padded_line];
     let mut si = 0;
     let mut di = 0;
@@ -202,7 +202,8 @@ impl BitWriter {
             *self.buf.last_mut().unwrap() |= (data << self.bits) as u8;
         } else {
             nbits -= self.bits;
-            *self.buf.last_mut().unwrap() |= ((data as u64 >> nbits) as u8) & ((1u16 << self.bits) - 1) as u8;
+            *self.buf.last_mut().unwrap() |=
+                ((data as u64 >> nbits) as u8) & ((1u16 << self.bits) - 1) as u8;
             while nbits > 8 {
                 nbits -= 8;
                 self.buf.push((data >> nbits) as u8);
@@ -307,7 +308,7 @@ fn preprocess_signed(raw: &[u32], bits_per_sample: u32, xmax: u32) -> Vec<u32> {
         let nxt = sx[i + 1];
         if nxt < cur {
             let diff = (cur as u32).wrapping_sub(nxt as u32);
-            if diff <= (xmax as u32).wrapping_add((cur as u32).wrapping_add(1)) {
+            if diff <= xmax.wrapping_add((cur as u32).wrapping_add(1)) {
                 // half_d style: 2*D - 1
                 d[i + 1] = 2u32.wrapping_mul(diff).wrapping_sub(1);
             } else {
@@ -326,7 +327,13 @@ fn preprocess_signed(raw: &[u32], bits_per_sample: u32, xmax: u32) -> Vec<u32> {
     d
 }
 
-fn assess_splitting(block: &[u32], block_size: usize, has_ref: bool, prev_k: u32, kmax: u32) -> (u32, u32) {
+fn assess_splitting(
+    block: &[u32],
+    block_size: usize,
+    has_ref: bool,
+    prev_k: u32,
+    kmax: u32,
+) -> (u32, u32) {
     let this_bs = if has_ref { block_size - 1 } else { block_size } as u64;
     let effective = if has_ref { &block[1..] } else { block };
 
@@ -417,7 +424,16 @@ impl Encoder {
             ((1u64 << bits_per_sample) - 1) as u32
         };
         let bytes_per_sample = bits_to_bytes(bits_per_sample);
-        Ok(Self { bits_per_sample, block_size, rsi, flags, id_len, kmax, xmax, bytes_per_sample })
+        Ok(Self {
+            bits_per_sample,
+            block_size,
+            rsi,
+            flags,
+            id_len,
+            kmax,
+            xmax,
+            bytes_per_sample,
+        })
     }
 
     fn read_samples(&self, data: &[u8]) -> Vec<u32> {
@@ -438,24 +454,36 @@ impl Encoder {
                 }
                 3 => {
                     if msb {
-                        ((data[off] as u32) << 16) | ((data[off + 1] as u32) << 8) | data[off + 2] as u32
+                        ((data[off] as u32) << 16)
+                            | ((data[off + 1] as u32) << 8)
+                            | data[off + 2] as u32
                     } else {
-                        (data[off] as u32) | ((data[off + 1] as u32) << 8) | ((data[off + 2] as u32) << 16)
+                        (data[off] as u32)
+                            | ((data[off + 1] as u32) << 8)
+                            | ((data[off + 2] as u32) << 16)
                     }
                 }
                 4 => {
                     if msb {
-                        ((data[off] as u32) << 24) | ((data[off + 1] as u32) << 16)
-                            | ((data[off + 2] as u32) << 8) | data[off + 3] as u32
+                        ((data[off] as u32) << 24)
+                            | ((data[off + 1] as u32) << 16)
+                            | ((data[off + 2] as u32) << 8)
+                            | data[off + 3] as u32
                     } else {
-                        (data[off] as u32) | ((data[off + 1] as u32) << 8)
-                            | ((data[off + 2] as u32) << 16) | ((data[off + 3] as u32) << 24)
+                        (data[off] as u32)
+                            | ((data[off + 1] as u32) << 8)
+                            | ((data[off + 2] as u32) << 16)
+                            | ((data[off + 3] as u32) << 24)
                     }
                 }
                 _ => unreachable!(),
             };
             // Mask to bits_per_sample
-            let mask = if self.bits_per_sample == 32 { u32::MAX } else { (1u32 << self.bits_per_sample) - 1 };
+            let mask = if self.bits_per_sample == 32 {
+                u32::MAX
+            } else {
+                (1u32 << self.bits_per_sample) - 1
+            };
             samples.push(s & mask);
         }
         samples
@@ -482,8 +510,12 @@ impl Encoder {
 
             // Number of actual blocks to encode
             let blocks_to_encode = if avail < rsi_samples {
-                let b = (avail + self.block_size as usize - 1) / self.block_size as usize;
-                if b == 0 { 1 } else { b }
+                let b = avail.div_ceil(self.block_size as usize);
+                if b == 0 {
+                    1
+                } else {
+                    b
+                }
             } else {
                 self.rsi as usize
             };
@@ -600,8 +632,15 @@ impl Encoder {
                         }
                     } else {
                         // Second extension
-                        encode_se(&mut writer, block, bs, has_ref, ref_sample,
-                                  self.id_len, self.bits_per_sample);
+                        encode_se(
+                            &mut writer,
+                            block,
+                            bs,
+                            has_ref,
+                            ref_sample,
+                            self.id_len,
+                            self.bits_per_sample,
+                        );
                     }
                 } else if uncomp_len <= se_len {
                     // Uncompressed
@@ -616,8 +655,15 @@ impl Encoder {
                     }
                 } else {
                     // Second extension
-                    encode_se(&mut writer, block, bs, has_ref, ref_sample,
-                              self.id_len, self.bits_per_sample);
+                    encode_se(
+                        &mut writer,
+                        block,
+                        bs,
+                        has_ref,
+                        ref_sample,
+                        self.id_len,
+                        self.bits_per_sample,
+                    );
                 }
             }
 
@@ -669,7 +715,12 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0, acc: 0, bitp: 0 }
+        Self {
+            data,
+            pos: 0,
+            acc: 0,
+            bitp: 0,
+        }
     }
 
     fn fill(&mut self) {
@@ -824,7 +875,15 @@ impl Decoder {
             ((1u64 << bits_per_sample) - 1) as u32
         };
         let bytes_per_sample = bits_to_bytes(bits_per_sample);
-        Ok(Self { bits_per_sample, block_size, rsi, flags, id_len, xmax, bytes_per_sample })
+        Ok(Self {
+            bits_per_sample,
+            block_size,
+            rsi,
+            flags,
+            id_len,
+            xmax,
+            bytes_per_sample,
+        })
     }
 
     fn decode(&self, compressed: &[u8], output_samples: usize) -> Result<Vec<u32>, String> {
@@ -842,7 +901,9 @@ impl Decoder {
             let mut rsi_buf: Vec<u32> = Vec::with_capacity(rsi_samples);
             let mut first_block_in_rsi = true;
 
-            while rsi_buf.len() < rsi_samples && all_output.len() + rsi_buf.len() < output_samples + rsi_samples {
+            while rsi_buf.len() < rsi_samples
+                && all_output.len() + rsi_buf.len() < output_samples + rsi_samples
+            {
                 let has_ref = pp && first_block_in_rsi;
                 let encoded_block_size = if has_ref {
                     self.block_size - 1
@@ -898,9 +959,7 @@ impl Decoder {
 
                         let zero_samples = zero_blocks as usize * self.block_size as usize
                             - if has_ref { 1 } else { 0 };
-                        for _ in 0..zero_samples {
-                            rsi_buf.push(0);
-                        }
+                        rsi_buf.extend(std::iter::repeat_n(0, zero_samples));
                     }
                 } else if id == (1u32 << self.id_len) - 1 {
                     // Uncompressed
@@ -1026,8 +1085,10 @@ pub fn compress(
     pixels_per_scanline: u32,
     options_mask: u32,
 ) -> Result<Vec<u8>, String> {
-    if pixels_per_scanline == 0 || pixels_per_block == 0
-        || pixels_per_block & 1 != 0 || bits_per_pixel == 0
+    if pixels_per_scanline == 0
+        || pixels_per_block == 0
+        || pixels_per_block & 1 != 0
+        || bits_per_pixel == 0
         || (bits_per_pixel > 32 && bits_per_pixel != 64)
     {
         return Err("invalid SZIP parameters".into());
@@ -1035,7 +1096,7 @@ pub fn compress(
 
     let flags = AEC_NOT_ENFORCE | convert_options(options_mask);
     let block_size = pixels_per_block;
-    let rsi = (pixels_per_scanline + pixels_per_block - 1) / pixels_per_block;
+    let rsi = pixels_per_scanline.div_ceil(pixels_per_block);
 
     let interleave = bits_per_pixel == 32 || bits_per_pixel == 64;
     let bits_per_sample;
@@ -1045,12 +1106,16 @@ pub fn compress(
         bits_per_sample = 8;
         input_buf = interleave_buffer(data, (bits_per_pixel / 8) as usize);
     } else {
-        bits_per_sample = if bits_per_pixel == 64 { 8 } else { bits_per_pixel };
+        bits_per_sample = if bits_per_pixel == 64 {
+            8
+        } else {
+            bits_per_pixel
+        };
         input_buf = data.to_vec();
     }
 
     let pixel_size = bits_to_bytes(bits_per_sample) as usize;
-    if data.len() % pixel_size != 0 {
+    if !data.len().is_multiple_of(pixel_size) {
         return Err("input size not a multiple of pixel size".into());
     }
 
@@ -1092,8 +1157,10 @@ pub fn decompress(
     pixels_per_scanline: u32,
     options_mask: u32,
 ) -> Result<Vec<u8>, String> {
-    if pixels_per_scanline == 0 || pixels_per_block == 0
-        || pixels_per_block & 1 != 0 || bits_per_pixel == 0
+    if pixels_per_scanline == 0
+        || pixels_per_block == 0
+        || pixels_per_block & 1 != 0
+        || bits_per_pixel == 0
         || (bits_per_pixel > 32 && bits_per_pixel != 64)
     {
         return Err("invalid SZIP parameters".into());
@@ -1101,19 +1168,22 @@ pub fn decompress(
 
     let flags = convert_options(options_mask);
     let block_size = pixels_per_block;
-    let rsi = (pixels_per_scanline + pixels_per_block - 1) / pixels_per_block;
+    let rsi = pixels_per_scanline.div_ceil(pixels_per_block);
 
-    let deinterleave = (bits_per_pixel == 32 || bits_per_pixel == 64)
-        && options_mask & SZ_RAW_OPTION_MASK == 0;
-    let bits_per_sample = if deinterleave { 8 } else if bits_per_pixel == 64 { 8 } else { bits_per_pixel };
+    let deinterleave =
+        (bits_per_pixel == 32 || bits_per_pixel == 64) && options_mask & SZ_RAW_OPTION_MASK == 0;
+    let bits_per_sample = if deinterleave || bits_per_pixel == 64 {
+        8
+    } else {
+        bits_per_pixel
+    };
     let pixel_size = bits_to_bytes(bits_per_sample) as usize;
 
-    let pad_scanline = pixels_per_scanline % pixels_per_block != 0;
+    let pad_scanline = !pixels_per_scanline.is_multiple_of(pixels_per_block);
     let _extra_buffer = pad_scanline || deinterleave;
 
     let decode_output_size = if pad_scanline {
-        let scanlines = (output_size / pixel_size + pixels_per_scanline as usize - 1)
-            / pixels_per_scanline as usize;
+        let scanlines = (output_size / pixel_size).div_ceil(pixels_per_scanline as usize);
         rsi as usize * block_size as usize * pixel_size * scanlines
     } else {
         output_size
@@ -1126,16 +1196,14 @@ pub fn decompress(
 
     if pad_scanline {
         let line_size = pixels_per_scanline as usize * pixel_size;
-        let padding_size = (rsi as usize * block_size as usize - pixels_per_scanline as usize) * pixel_size;
+        let padding_size =
+            (rsi as usize * block_size as usize - pixels_per_scanline as usize) * pixel_size;
         remove_padding(&mut raw_bytes, line_size, padding_size);
     }
 
     let result = if deinterleave {
         let len = std::cmp::min(raw_bytes.len(), output_size);
         deinterleave_buffer(&raw_bytes[..len], (bits_per_pixel / 8) as usize)
-    } else if pad_scanline {
-        raw_bytes.truncate(output_size);
-        raw_bytes
     } else {
         raw_bytes.truncate(output_size);
         raw_bytes
@@ -1151,12 +1219,35 @@ pub fn decompress(
 mod tests {
     use super::*;
 
-    fn roundtrip(data: &[u8], bits_per_pixel: u32, pixels_per_block: u32, pixels_per_scanline: u32, options_mask: u32) {
-        let compressed = compress(data, bits_per_pixel, pixels_per_block, pixels_per_scanline, options_mask)
-            .expect("compress failed");
-        let decompressed = decompress(&compressed, data.len(), bits_per_pixel, pixels_per_block, pixels_per_scanline, options_mask)
-            .expect("decompress failed");
-        assert_eq!(data, &decompressed[..], "roundtrip mismatch for bpp={bits_per_pixel}");
+    fn roundtrip(
+        data: &[u8],
+        bits_per_pixel: u32,
+        pixels_per_block: u32,
+        pixels_per_scanline: u32,
+        options_mask: u32,
+    ) {
+        let compressed = compress(
+            data,
+            bits_per_pixel,
+            pixels_per_block,
+            pixels_per_scanline,
+            options_mask,
+        )
+        .expect("compress failed");
+        let decompressed = decompress(
+            &compressed,
+            data.len(),
+            bits_per_pixel,
+            pixels_per_block,
+            pixels_per_scanline,
+            options_mask,
+        )
+        .expect("decompress failed");
+        assert_eq!(
+            data,
+            &decompressed[..],
+            "roundtrip mismatch for bpp={bits_per_pixel}"
+        );
     }
 
     #[test]
@@ -1251,9 +1342,7 @@ mod tests {
     #[test]
     fn test_roundtrip_u8_random_like() {
         // Data with varying patterns to exercise different code paths
-        let data: Vec<u8> = (0..256).map(|i| {
-            ((i * 7 + 13) % 256) as u8
-        }).collect();
+        let data: Vec<u8> = (0..256).map(|i| ((i * 7 + 13) % 256) as u8).collect();
         roundtrip(&data, 8, 16, 256, SZ_NN_OPTION_MASK | SZ_MSB_OPTION_MASK);
     }
 
@@ -1263,6 +1352,9 @@ mod tests {
         let data = vec![0u8; 1024];
         let compressed = compress(&data, 8, 16, 1024, SZ_NN_OPTION_MASK | SZ_MSB_OPTION_MASK)
             .expect("compress failed");
-        assert!(compressed.len() < data.len(), "compression should reduce size for zeros");
+        assert!(
+            compressed.len() < data.len(),
+            "compression should reduce size for zeros"
+        );
     }
 }

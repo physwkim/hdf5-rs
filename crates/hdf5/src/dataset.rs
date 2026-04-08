@@ -131,12 +131,24 @@ impl<T: H5Type> DatasetBuilder<T> {
         self
     }
 
+    /// Enable Zstandard compression with the given level (1-22, default 3).
+    ///
+    /// Requires chunked storage (call `.chunk()` before `.create()`).
+    #[must_use]
+    pub fn zstd(mut self, level: u32) -> Self {
+        self.custom_pipeline = Some(hdf5_format::messages::filter::FilterPipeline::zstd(level));
+        self
+    }
+
     /// Set a custom filter pipeline for compression.
     ///
     /// This takes precedence over [`deflate`](Self::deflate) and
     /// [`shuffle_deflate`](Self::shuffle_deflate). Requires chunked storage.
     #[must_use]
-    pub fn filter_pipeline(mut self, pipeline: hdf5_format::messages::filter::FilterPipeline) -> Self {
+    pub fn filter_pipeline(
+        mut self,
+        pipeline: hdf5_format::messages::filter::FilterPipeline,
+    ) -> Self {
         self.custom_pipeline = Some(pipeline);
         self
     }
