@@ -33,7 +33,7 @@ Read and write HDF5 files with contiguous, chunked, and compressed datasets, hie
 
 ```toml
 [dependencies]
-rust-hdf5 = "0.1"
+rust-hdf5 = "0.2"
 ```
 
 ### Write
@@ -205,7 +205,7 @@ let data = reader.read_dataset::<f32>("frames")?;
 ```toml
 # Enable LZ4 + Zstandard
 [dependencies]
-rust-hdf5 = { version = "0.1", features = ["lz4", "zstd"] }
+rust-hdf5 = { version = "0.2", features = ["lz4", "zstd"] }
 ```
 
 ## Feature flags
